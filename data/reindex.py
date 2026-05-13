@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from datetime import datetime, timezone
 
-sys.path.insert(0, "/home/phungkien/EHC_HELPDESK/ehc-helpdesk")
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import httpx
 from sentence_transformers import SentenceTransformer
@@ -33,7 +33,7 @@ def full_reindex() -> None:
     """Drop collection and rebuild from scratch."""
     print("[REINDEX] Full rebuild starting...")
     docs = fetch_all_documents()
-    count = embed_and_store(docs)
+    count = embed_and_store(docs, recreate=True)
     _save_timestamp()
     print(f"[REINDEX] Full rebuild complete. {count} chunks indexed.")
 

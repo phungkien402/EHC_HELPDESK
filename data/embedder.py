@@ -9,8 +9,9 @@ Run standalone: python -m data.embedder
 """
 
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "/home/phungkien/EHC_HELPDESK/ehc-helpdesk")
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
@@ -28,9 +29,13 @@ def build_chunk_text(doc: Document) -> str:
     return f"Câu hỏi: {doc.subject}\nHướng dẫn: {doc.description}"
 
 
-def embed_and_store(docs: list[Document]) -> int:
+def embed_and_store(docs: list[Document], recreate: bool = False) -> int:
     """
     Embed all documents and upsert into Qdrant.
+    Args:
+        docs: list of Document objects to embed
+        recreate: if True, drop and recreate collection (used by full reindex).
+                  if False (default), create only if not exists, then upsert safely.
     Returns the number of chunks stored.
     """
     if not docs:
@@ -54,14 +59,24 @@ def embed_and_store(docs: list[Document]) -> int:
     # Connect to Qdrant
     client = QdrantClient(url=QDRANT_URL)
 
-    # Create collection (drop first if exists for clean state)
-    print(f"[EMBEDDER] Creating/recreating collection '{QDRANT_COLLECTION}' (dim=1024, cosine)")
-    if client.collection_exists(QDRANT_COLLECTION):
-        client.delete_collection(QDRANT_COLLECTION)
-    client.create_collection(
-        collection_name=QDRANT_COLLECTION,
-        vectors_config=VectorParams(size=1024, distance=Distance.COSINE),
-    )
+    # Collection management
+    if recreate:
+        print(f"[EMBEDDER] Recreating collection '{QDRANT_COLLECTION}' (dim=1024, cosine)")
+        if client.collection_exists(QDRANT_COLLECTION):
+            client.delete_collection(QDRANT_COLLECTION)
+        client.create_collection(
+            collection_name=QDRANT_COLLECTION,
+            vectors_config=VectorParams(size=1024, distance=Distance.COSINE),
+        )
+    else:
+        if not client.collection_exists(QDRANT_COLLECTION):
+            print(f"[EMBEDDER] Creating collection '{QDRANT_COLLECTION}' (dim=1024, cosine)")
+            client.create_collection(
+                collection_name=QDRANT_COLLECTION,
+                vectors_config=VectorParams(size=1024, distance=Distance.COSINE),
+            )
+        else:
+            print(f"[EMBEDDER] Collection '{QDRANT_COLLECTION}' exists, upserting...")
 
     # Upsert in batches of 100
     batch_size = 100
