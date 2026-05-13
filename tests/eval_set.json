@@ -1,16 +1,32 @@
 [
   {
     "id": "q01",
-    "question": "how do I merge duplicate patient records",
+    "question": "gộp mã bệnh nhân như nào",
     "type": "in_faq",
-    "expected_keywords": ["merge", "patient", "step"],
-    "expected_faq_subject": "Merge duplicate patient records"
+    "expected_keywords": ["module", "bệnh nhân"]
   },
   {
     "id": "q02",
-    "question": "where do I print the medication order sheet",
+    "question": "in bảng kê khám bệnh tìm ở đâu",
     "type": "in_faq",
-    "expected_keywords": ["print", "medication", "order"],
-    "expected_faq_subject": null
+    "expected_keywords": ["module", "in", "bảng kê"]
+  },
+  {
+    "id": "q03",
+    "question": "xem tồn kho thuốc ở đâu",
+    "type": "in_faq",
+    "expected_keywords": ["module", "điều trị", "dược"]
+  },
+  {
+    "id": "q04",
+    "question": "???",
+    "type": "ambiguous",
+    "expected_behavior": "ask_clarification"
+  },
+  {
+    "id": "q05",
+    "question": "cài đặt vpn như thế nào",
+    "type": "not_in_faq",
+    "expected_behavior": "fallback"
   }
 ]

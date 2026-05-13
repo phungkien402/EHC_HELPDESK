@@ -29,6 +29,7 @@ class Answer:
     """The final response returned by the pipeline."""
     text: str
     confidence: float  # 0.0 – 1.0, from top reranker score
+    rewritten_question: str = ""  # what the query rewriter produced
     source_chunks: list[RetrievedChunk] = field(default_factory=list)
     is_fallback: bool = False
 

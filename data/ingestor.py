@@ -8,6 +8,7 @@ Normalizes arrow separators (-->, =>, ==>) to → for consistency.
 Run standalone: python -m data.ingestor
 """
 
+import re
 from dataclasses import dataclass
 
 

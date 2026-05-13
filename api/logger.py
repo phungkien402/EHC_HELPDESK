@@ -34,7 +34,10 @@ class QueryLogger:
         self._log_path = log_path
 
     def log(self, message, answer) -> None:
-        """Log a query and its answer."""
+        """
+        Log a query and its answer.
+        Uses answer.rewritten_question for the rewritten field.
+        """
         ...
 
     def read_logs(self, limit: int = 50, fallback_only: bool = False) -> list[dict]:
