@@ -62,6 +62,39 @@ Created the full project directory structure and skeleton files for the EHC AI H
 
 ---
 
+## Phase 0 — Review Fixes (Round 2)
+
+**Date:** 2026-05-13  
+**Status:** ✅ Complete
+
+### What was done
+
+1. **`core/models.py`** — Moved `rewritten_question` field to end of `Answer` dataclass (after `is_fallback`) so default-value ordering is correct.
+2. **`api/logger.py`** — Fully implemented `log()` and `read_logs()` methods (no longer stubs). Added proper `__main__` test block.
+3. **`data/ingestor.py`** — Fixed `__main__` block to handle `None` return from stub gracefully.
+4. **`run.sh`** — Created helper script to work around restricted PATH in dev shell.
+
+### Verification output
+
+```
+$ python -m data.ingestor
+fetch_all_documents() returned None (stub not yet implemented)
+✓ Module imports correctly — implementation pending Phase 1.
+```
+
+```
+$ python -m api.logger
+Logged 1 entries: [{'timestamp': 1778666320.351109, 'user_id': 'test', 'platform': 'web', 'question': 'test question', 'rewritten_question': 'rewritten test question', 'answer': 'test answer', 'confidence': 0.9, 'is_fallback': False, 'top_chunk_subject': ''}]
+✓ QueryLogger works correctly.
+```
+
+### Notes
+
+- `run.sh` uses `/usr/bin/python3` (Python 3.12.3) with full PATH export — use `/bin/bash run.sh` for all Python commands in this environment.
+- `data/ingestor.py` body is still a stub — will be implemented in Phase 1.
+
+---
+
 ## Next: Phase 1 — Data Layer (Ingestor + Embedder)
 
 Will implement:

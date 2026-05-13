@@ -38,9 +38,13 @@ def fetch_all_documents() -> list[Document]:
 
 if __name__ == "__main__":
     docs = fetch_all_documents()
-    print(f"Total fetched : {len(docs)} documents")
-    print(f"\nExample:")
-    if docs:
-        print(f"  Subject    : {docs[0].subject}")
-        print(f"  Description: {docs[0].description}")
-        print(f"  URL        : {docs[0].url}")
+    if docs is None:
+        print("fetch_all_documents() returned None (stub not yet implemented)")
+        print("✓ Module imports correctly — implementation pending Phase 1.")
+    else:
+        print(f"Total fetched : {len(docs)} documents")
+        print(f"\nExample:")
+        if docs:
+            print(f"  Subject    : {docs[0].subject}")
+            print(f"  Description: {docs[0].description}")
+            print(f"  URL        : {docs[0].url}")
