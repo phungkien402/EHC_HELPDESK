@@ -19,16 +19,9 @@ from FlagEmbedding import FlagReranker
 from config import RERANKER_MODEL, RERANKER_TOP_N, CONFIDENCE_THRESHOLD
 from core.models import RetrievedChunk
 
-# Lazy-loaded singleton
-_reranker = None
-
-
-def _get_reranker() -> FlagReranker:
-    global _reranker
-    if _reranker is None:
-        print(f"[RERANKER] Loading model: {RERANKER_MODEL}")
-        _reranker = FlagReranker(RERANKER_MODEL, use_fp16=False)
-    return _reranker
+# Module-level singleton — loaded once when module is first imported
+print(f"[RERANKER] Loading model: {RERANKER_MODEL}")
+_reranker = FlagReranker(RERANKER_MODEL, use_fp16=False)
 
 
 def rerank(query: str, chunks: list[RetrievedChunk], top_n: int = None) -> list[RetrievedChunk]:
@@ -46,11 +39,10 @@ def rerank(query: str, chunks: list[RetrievedChunk], top_n: int = None) -> list[
     print(f"[RERANKER] Input: {len(chunks)} chunks")
 
     # Build (query, chunk_text) pairs for cross-encoder
-    reranker = _get_reranker()
     pairs = [[query, chunk.text] for chunk in chunks]
 
     # Compute reranker scores
-    scores = reranker.compute_score(pairs, normalize=True)
+    scores = _reranker.compute_score(pairs, normalize=True)
 
     # Handle single result (returns float instead of list)
     if isinstance(scores, float):

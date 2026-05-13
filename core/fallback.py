@@ -43,7 +43,7 @@ def handle(message: Message, session_history: list) -> Answer:
 
     # Check if we already asked for clarification in this session
     already_clarified = any(
-        isinstance(h, Answer) and h.is_fallback and h.text == CLARIFICATION_RESPONSE
+        isinstance(h, dict) and h.get("text") == CLARIFICATION_RESPONSE
         for h in session_history
     )
 
@@ -85,7 +85,8 @@ if __name__ == "__main__":
 
     # Test Case 2: already clarified
     msg2 = Message(user_id="test", session_id="s1", text="lỗi gì đó", timestamp=time.time(), platform="web")
-    answer2 = handle(msg2, [answer1])  # history contains the clarification
+    history = [{"text": CLARIFICATION_RESPONSE, "is_fallback": True}]
+    answer2 = handle(msg2, history)  # history contains the clarification
     print(f"[TEST] Input: {msg2.text!r} (with clarification in history)")
     print(f"[TEST] Response: {answer2.text}")
     print()

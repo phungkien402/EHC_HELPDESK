@@ -18,6 +18,9 @@ from openai import OpenAI
 from config import VLLM_BASE_URL, VLLM_MODEL
 from core.models import RetrievedChunk
 
+# Module-level client — created once when module is first imported
+_client = OpenAI(base_url=f"{VLLM_BASE_URL}/v1", api_key="not-needed")
+
 SYSTEM_PROMPT = (
     "You are a technical support assistant for the EHC electronic medical record software. "
     "Your job is to answer doctors' questions based SOLELY on the reference documentation "
@@ -55,12 +58,7 @@ def generate(query: str, chunks: list[RetrievedChunk]) -> str:
     print(f"[GENERATOR] Prompt length: ~{len(user_prompt)} chars")
 
     try:
-        client = OpenAI(
-            base_url=f"{VLLM_BASE_URL}/v1",
-            api_key="not-needed",
-        )
-
-        response = client.chat.completions.create(
+        response = _client.chat.completions.create(
             model=VLLM_MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},

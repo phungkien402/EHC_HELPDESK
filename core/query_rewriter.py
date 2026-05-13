@@ -16,6 +16,9 @@ from openai import OpenAI
 
 from config import VLLM_BASE_URL, VLLM_MODEL
 
+# Module-level client — created once when module is first imported
+_client = OpenAI(base_url=f"{VLLM_BASE_URL}/v1", api_key="not-needed")
+
 SYSTEM_PROMPT = (
     "You are a query normalization assistant. Convert colloquial, shorthand "
     "questions about the EHC electronic medical record software into clear, complete "
@@ -32,12 +35,7 @@ def rewrite(text: str) -> str:
     print(f"[REWRITER] Original : \"{text}\"")
 
     try:
-        client = OpenAI(
-            base_url=f"{VLLM_BASE_URL}/v1",
-            api_key="not-needed",
-        )
-
-        response = client.chat.completions.create(
+        response = _client.chat.completions.create(
             model=VLLM_MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},

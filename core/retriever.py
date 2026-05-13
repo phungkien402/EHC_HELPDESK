@@ -19,24 +19,10 @@ from qdrant_client import QdrantClient
 from config import QDRANT_URL, QDRANT_COLLECTION, EMBED_MODEL, RETRIEVER_TOP_K
 from core.models import RetrievedChunk
 
-# Lazy-loaded singleton to avoid reloading model on every call
-_model = None
-_client = None
-
-
-def _get_model() -> SentenceTransformer:
-    global _model
-    if _model is None:
-        print(f"[RETRIEVER] Loading embedding model: {EMBED_MODEL}")
-        _model = SentenceTransformer(EMBED_MODEL)
-    return _model
-
-
-def _get_client() -> QdrantClient:
-    global _client
-    if _client is None:
-        _client = QdrantClient(url=QDRANT_URL)
-    return _client
+# Module-level singletons — loaded once when module is first imported
+print(f"[RETRIEVER] Loading embedding model: {EMBED_MODEL}")
+_model = SentenceTransformer(EMBED_MODEL)
+_client = QdrantClient(url=QDRANT_URL)
 
 
 def retrieve(query: str, top_k: int = None) -> list[RetrievedChunk]:
@@ -50,12 +36,10 @@ def retrieve(query: str, top_k: int = None) -> list[RetrievedChunk]:
     print(f"[RETRIEVER] Query: \"{query}\"")
 
     # Embed the query
-    model = _get_model()
-    query_vector = model.encode(query).tolist()
+    query_vector = _model.encode(query).tolist()
 
     # Search Qdrant
-    client = _get_client()
-    results = client.search(
+    results = _client.search(
         collection_name=QDRANT_COLLECTION,
         query_vector=query_vector,
         limit=top_k,
