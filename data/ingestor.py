@@ -9,7 +9,13 @@ Run standalone: python -m data.ingestor
 """
 
 import re
+import sys
 from dataclasses import dataclass
+
+import httpx
+
+sys.path.insert(0, "/home/phungkien/EHC_HELPDESK/ehc-helpdesk")
+from config import REDMINE_URL, REDMINE_API_KEY, REDMINE_PROJECT
 
 
 @dataclass
@@ -24,7 +30,13 @@ class Document:
 
 def normalize(text: str) -> str:
     """Normalize arrow separators and collapse whitespace."""
-    ...
+    # Order matters: longest arrows first to avoid partial replacements
+    text = text.replace("==>", "→")
+    text = text.replace("-->", "→")
+    text = text.replace("=>", "→")
+    # Collapse multiple spaces and newlines
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
 
 def fetch_all_documents() -> list[Document]:
@@ -33,18 +45,75 @@ def fetch_all_documents() -> list[Document]:
     Skips issues with empty or too-short descriptions.
     Returns a list of Document objects.
     """
-    ...
+    docs: list[Document] = []
+    offset = 0
+    limit = 100
+    skipped = 0
+
+    print(f"[INGESTOR] Fetching from {REDMINE_URL}/issues.json (project={REDMINE_PROJECT})")
+
+    while True:
+        params = {
+            "project_id": REDMINE_PROJECT,
+            "limit": limit,
+            "offset": offset,
+            "key": REDMINE_API_KEY,
+            "status_id": "*",  # all statuses
+        }
+
+        response = httpx.get(
+            f"{REDMINE_URL}/issues.json",
+            params=params,
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        issues = data.get("issues", [])
+
+        if not issues:
+            break
+
+        page_num = (offset // limit) + 1
+        print(f"[INGESTOR] Page {page_num}: fetched {len(issues)} issues (offset={offset})")
+
+        for issue in issues:
+            issue_id = issue["id"]
+            subject = issue.get("subject", "").strip()
+            description = issue.get("description", "").strip()
+
+            # Skip condition: empty or too short description
+            if not description or len(description) < 20:
+                reason = "empty description" if not description else f"too short ({len(description)} chars)"
+                print(f"  [SKIP] id={issue_id} subject=\"{subject[:50]}\" reason=\"{reason}\"")
+                skipped += 1
+                continue
+
+            # Normalize text
+            subject = normalize(subject)
+            description = normalize(description)
+
+            doc = Document(
+                issue_id=issue_id,
+                subject=subject,
+                description=description,
+                project=REDMINE_PROJECT,
+                url=f"{REDMINE_URL}/issues/{issue_id}",
+            )
+            docs.append(doc)
+
+        offset += limit
+
+    print(f"\n[INGESTOR] Done. Total usable: {len(docs)}, Skipped: {skipped}")
+    return docs
 
 
 if __name__ == "__main__":
     docs = fetch_all_documents()
-    if docs is None:
-        print("fetch_all_documents() returned None (stub not yet implemented)")
-        print("✓ Module imports correctly — implementation pending Phase 1.")
-    else:
-        print(f"Total fetched : {len(docs)} documents")
-        print(f"\nExample:")
-        if docs:
-            print(f"  Subject    : {docs[0].subject}")
-            print(f"  Description: {docs[0].description}")
-            print(f"  URL        : {docs[0].url}")
+    print(f"\nTotal fetched : {len(docs)} documents")
+    print(f"\nFirst 3 examples:")
+    for doc in docs[:3]:
+        print(f"  ---")
+        print(f"  ID         : {doc.issue_id}")
+        print(f"  Subject    : {doc.subject}")
+        print(f"  Description: {doc.description[:100]}")
+        print(f"  URL        : {doc.url}")
