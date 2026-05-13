@@ -102,7 +102,10 @@ async def handle_webhook(platform: str, request: Request, background_tasks: Back
     _logger.log(message, answer)
 
     # Format response for platform
-    response_text = adapter.format_response(answer.text, answer.confidence)
+    response_text = adapter.format_response(
+        answer.text,
+        confidence=0.0 if answer.is_fallback else answer.confidence,
+    )
 
     # Send response back via platform API (async, in background for Telegram/Zalo)
     if platform != "web":
