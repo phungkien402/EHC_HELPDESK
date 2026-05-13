@@ -301,6 +301,46 @@
             font-size: 14px;
         }
 
+        /* Detail panel */
+        .detail-panel {
+            margin-top: 16px;
+            background: white;
+            border-radius: 8px;
+            padding: 16px 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+            border-left: 4px solid #1a73e8;
+            display: none;
+        }
+
+        .detail-panel.visible { display: block; }
+
+        .detail-panel h3 {
+            font-size: 14px;
+            margin-bottom: 12px;
+            color: #1a73e8;
+        }
+
+        .detail-panel .detail-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+
+        .detail-panel .detail-label {
+            font-weight: 600;
+            min-width: 140px;
+            color: #555;
+        }
+
+        .detail-panel .detail-value {
+            color: #1a1a1a;
+            word-break: break-word;
+        }
+
+        .logs-table tbody tr { cursor: pointer; }
+        .logs-table tbody tr.selected td { background: #e3f2fd; }
+
         /* Responsive */
         @media (max-width: 768px) {
             .chat-container { padding: 8px; }
@@ -351,18 +391,44 @@
             <div id="logs-container">
                 <div class="empty-state">Nh&#7845;n "T&#7843;i l&#7841;i" &#273;&#7875; xem logs</div>
             </div>
+            <div class="detail-panel" id="detail-panel">
+                <h3>Chi ti&#7871;t</h3>
+                <div class="detail-row"><span class="detail-label">C&#226;u h&#7887;i g&#7889;c:</span><span class="detail-value" id="detail-question"></span></div>
+                <div class="detail-row"><span class="detail-label">C&#226;u h&#7887;i rewrite:</span><span class="detail-value" id="detail-rewritten"></span></div>
+                <div class="detail-row"><span class="detail-label">Top chunk subject:</span><span class="detail-value" id="detail-chunk"></span></div>
+                <div class="detail-row"><span class="detail-label">Confidence:</span><span class="detail-value" id="detail-confidence"></span></div>
+                <div class="detail-row"><span class="detail-label">Outcome:</span><span class="detail-value" id="detail-outcome"></span></div>
+            </div>
         </div>
     </div>
 
     <script>
         // ===== TAB SWITCHING =====
+        var adminRefreshTimer = null;
+
+        function startAdminRefresh() {
+            loadLogs();
+            adminRefreshTimer = setInterval(loadLogs, 30000);
+        }
+
+        function stopAdminRefresh() {
+            if (adminRefreshTimer) {
+                clearInterval(adminRefreshTimer);
+                adminRefreshTimer = null;
+            }
+        }
+
         document.querySelectorAll('.tab-btn').forEach(function(btn) {
             btn.addEventListener('click', function() {
                 document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
                 document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
                 btn.classList.add('active');
                 document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
-                if (btn.dataset.tab === 'admin') loadLogs();
+                if (btn.dataset.tab === 'admin') {
+                    startAdminRefresh();
+                } else {
+                    stopAdminRefresh();
+                }
             });
         });
 
@@ -483,6 +549,8 @@
         }
 
         // ===== ADMIN =====
+        var logsData = []; // Store full log data for detail panel
+
         function loadLogs() {
             var fallbackOnly = document.getElementById('fallback-filter').checked;
             var statusEl = document.getElementById('admin-status');
@@ -502,14 +570,17 @@
 
         function renderLogs(logs) {
             var container = document.getElementById('logs-container');
+            var detailPanel = document.getElementById('detail-panel');
+            detailPanel.classList.remove('visible');
 
             if (!logs || logs.length === 0) {
+                logsData = [];
                 container.innerHTML = '<div class="empty-state">Chưa có logs nào</div>';
                 return;
             }
 
             // Reverse to show newest first
-            logs = logs.slice().reverse();
+            logsData = logs.slice().reverse();
 
             var html = '<table class="logs-table">';
             html += '<thead><tr>';
@@ -521,12 +592,12 @@
             html += '<th class="col-fallback">Status</th>';
             html += '</tr></thead><tbody>';
 
-            logs.forEach(function(log) {
+            logsData.forEach(function(log, index) {
                 var time = new Date(log.timestamp * 1000).toLocaleString('vi-VN');
                 var confClass = getConfidenceClass(log.confidence, log.is_fallback);
                 var confLabel = getConfidenceLabel(log.confidence, log.is_fallback);
 
-                html += '<tr>';
+                html += '<tr data-index="' + index + '" onclick="showDetail(' + index + ')">';
                 html += '<td class="col-time">' + escapeHtml(time) + '</td>';
                 html += '<td class="col-platform">' + escapeHtml(log.platform) + '</td>';
                 html += '<td class="truncate" title="' + escapeHtml(log.question) + '">' + escapeHtml(log.question) + '</td>';
@@ -538,6 +609,28 @@
 
             html += '</tbody></table>';
             container.innerHTML = html;
+        }
+
+        function showDetail(index) {
+            var log = logsData[index];
+            if (!log) return;
+
+            // Highlight selected row
+            document.querySelectorAll('.logs-table tbody tr').forEach(function(tr) {
+                tr.classList.remove('selected');
+            });
+            var selectedRow = document.querySelector('.logs-table tbody tr[data-index="' + index + '"]');
+            if (selectedRow) selectedRow.classList.add('selected');
+
+            // Fill detail panel
+            document.getElementById('detail-question').textContent = log.question || '';
+            document.getElementById('detail-rewritten').textContent = log.rewritten_question || '(same as original)';
+            document.getElementById('detail-chunk').textContent = log.top_chunk_subject || '(none)';
+            document.getElementById('detail-confidence').textContent = log.is_fallback ? 'N/A' : (log.confidence * 100).toFixed(1) + '%';
+            document.getElementById('detail-outcome').textContent = log.is_fallback ? 'FALLBACK' : 'OK';
+
+            // Show panel
+            document.getElementById('detail-panel').classList.add('visible');
         }
 
         function triggerReindex() {
