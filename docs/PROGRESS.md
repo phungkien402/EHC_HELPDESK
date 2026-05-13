@@ -280,4 +280,96 @@ Only vLLM connection is missing (server not started yet).
 
 ---
 
-## Next: Phase 3 — Adapter Layer + FastAPI Gateway
+## Phase 3 — Adapter Layer + FastAPI Gateway
+
+**Date:** 2026-05-13  
+**Status:** ✅ Complete
+
+### What was done
+
+1. **`adapters/telegram_adapter.py`** — Full implementation: parses Telegram Update webhooks (text messages only), formats response with confidence footer, sends via Bot API using httpx.
+2. **`adapters/zalo_adapter.py`** — Full implementation: parses Zalo OA `user_send_text` events, HMAC-SHA256 signature verification, sends via Zalo OA CS API.
+3. **`adapters/web_adapter.py`** — Full implementation: parses simple JSON `{user_id, text}` payloads, no-op send (web uses HTTP response directly).
+4. **`api/routes.py`** — Wired everything together: adapter registry, session management, pipeline execution, query logging, background message sending for Telegram/Zalo.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/health` | Health check |
+| GET | `/` | Serve web chat UI |
+| POST | `/webhook/{platform}` | Unified webhook (telegram/zalo/web) |
+| GET | `/admin/logs` | Query logs (optional `fallback_only` filter) |
+| POST | `/admin/reindex` | Trigger full reindex in background |
+
+### Test output
+
+#### Health check ✅
+
+```
+$ curl -s http://localhost:8080/health
+{"status":"ok","service":"ehc-helpdesk"}
+```
+
+#### Webhook (web platform) ✅
+
+```
+$ curl -s -X POST http://localhost:8080/webhook/web \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id": "test_user", "text": "in bảng kê khám bệnh ở đâu"}'
+
+{
+  "status": "ok",
+  "answer": "Lỗi: Không thể kết nối đến LLM server. Vui lòng thử lại sau.",
+  "confidence": 0.9894766451295799,
+  "is_fallback": false,
+  "rewritten_question": "in bảng kê khám bệnh ở đâu",
+  "sources": [
+    {"subject": "in bảng kê khám bệnh, chữa bệnh tìm ở đâu", "score": 0.9895, "url": "..."},
+    {"subject": "Muốn in sổ khám bệnh ở đâu?", "score": 0.9372, "url": "..."},
+    {"subject": "Lấy danh sách bệnh nhân nội trú ở đâu", "score": 0.8001, "url": "..."}
+  ]
+}
+```
+
+Pipeline correctly: retrieves → reranks (0.9895) → passes confidence → attempts generation.
+Only vLLM connection is missing (answer text shows error, but pipeline logic is correct).
+
+#### Admin logs ✅
+
+```
+$ curl -s http://localhost:8080/admin/logs?limit=5
+{"count":1,"logs":[{"timestamp":1778687552.71,"user_id":"test_user","platform":"web",
+"question":"in bảng kê khám bệnh ở đâu","rewritten_question":"in bảng kê khám bệnh ở đâu",
+"answer":"Lỗi: Không thể kết nối đến LLM server...","confidence":0.989,
+"is_fallback":false,"top_chunk_subject":"in bảng kê khám bệnh, chữa bệnh tìm ở đâu"}]}
+```
+
+#### Unknown platform → 400 ✅
+
+```
+$ curl -s -X POST http://localhost:8080/webhook/unknown -H 'Content-Type: application/json' -d '{}'
+{"detail":"Unknown platform: unknown"}
+```
+
+#### Server startup log
+
+```
+INFO:     Started server process [407075]
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8080
+[RETRIEVER] Loading embedding model: BAAI/bge-m3
+[RERANKER] Loading model: BAAI/bge-reranker-v2-m3
+```
+
+### Notes
+
+- Models (bge-m3, bge-reranker-v2-m3) load at module import time — first request takes ~15s while models load, subsequent requests are fast
+- vLLM not running — query_rewriter falls back to original query, generator returns error message
+- CORS enabled for web UI development
+- Telegram/Zalo send messages in background tasks (non-blocking)
+- Session history stored in memory (resets on server restart)
+
+---
+
+## Next: Phase 4 — Web Chat UI + vLLM Integration
