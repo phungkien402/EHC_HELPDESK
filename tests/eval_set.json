@@ -1,0 +1,16 @@
+[
+  {
+    "id": "q01",
+    "question": "how do I merge duplicate patient records",
+    "type": "in_faq",
+    "expected_keywords": ["merge", "patient", "step"],
+    "expected_faq_subject": "Merge duplicate patient records"
+  },
+  {
+    "id": "q02",
+    "question": "where do I print the medication order sheet",
+    "type": "in_faq",
+    "expected_keywords": ["print", "medication", "order"],
+    "expected_faq_subject": null
+  }
+]
