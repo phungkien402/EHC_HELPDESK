@@ -172,12 +172,112 @@ Test query: 'in bảng kê khám bệnh ở đâu'
 
 ---
 
-## Next: Phase 2 — RAG Core Pipeline
+## Phase 2 — RAG Core Pipeline
 
-Will implement:
-- `core/retriever.py` — embed query with bge-m3, search Qdrant
-- `core/reranker.py` — cross-encoder rescore with bge-reranker-v2-m3
-- `core/query_rewriter.py` — colloquial Vietnamese → formal query via LLM
-- `core/generator.py` — vLLM answer generation
-- `core/confidence.py` — threshold routing
-- `core/pipeline.py` — orchestrate all 5 steps
+**Date:** 2026-05-13  
+**Status:** ✅ Complete (vLLM-dependent steps degrade gracefully)
+
+### What was done
+
+1. **`core/retriever.py`** — Embeds query with bge-m3, searches Qdrant for Top-K chunks. Lazy-loads model singleton.
+2. **`core/reranker.py`** — Cross-encoder rescore with bge-reranker-v2-m3 (FlagReranker). Dramatically improves ranking quality.
+3. **`core/confidence.py`** — Already implemented (Phase 0). Threshold check against top reranker score.
+4. **`core/fallback.py`** — 3-case handler: ambiguous → clarify, already clarified → escalate, clear but not found → escalate.
+5. **`core/query_rewriter.py`** — LLM-based query normalization via vLLM OpenAI API. Falls back to original query if vLLM unavailable.
+6. **`core/generator.py`** — vLLM answer generation with strict grounding prompt. Returns error message if vLLM unavailable.
+7. **`core/pipeline.py`** — Orchestrates all 5 steps: rewrite → retrieve → rerank → confidence → generate/fallback.
+
+### Test output: `core/retriever.py` ✅
+
+```
+Query: "in bảng kê khám bệnh ở đâu"
+[RETRIEVER] Top 5 chunks retrieved:
+  #1  score=0.733 | in bảng kê khám bệnh, chữa bệnh tìm ở đâu
+  #2  score=0.676 | In phiếu khám chữa bệnh tìm ở đâu
+  #3  score=0.676 | Muốn in sổ khám bệnh ở đâu?
+  #4  score=0.612 | Lấy danh sách bệnh nhân nội trú ở đâu
+  #5  score=0.609 | Muốn in báo cáo nhập xuất tồn thuốc toàn viện ở đâu
+
+Query: "xem tồn kho thuốc"
+[RETRIEVER] Top 5 chunks retrieved:
+  #1  score=0.756 | Xem tồn kho thuốc ở đâu?
+  #2  score=0.653 | làm sao để kho ngoại trú vào kiểm tra được bác sỹ vào chiếm kho hay chưa hoàn tất
+  #3  score=0.635 | Kiểm kê kho như nào?
+```
+
+### Test output: `core/reranker.py` ✅
+
+```
+Query: "in bảng kê khám bệnh ở đâu"
+[RERANKER] After reranking (top 3):
+  #1  score=0.9895 | in bảng kê khám bệnh, chữa bệnh tìm ở đâu
+  #2  score=0.9372 | Muốn in sổ khám bệnh ở đâu?
+  #3  score=0.8001 | Lấy danh sách bệnh nhân nội trú ở đâu
+[RERANKER] Top score: 0.9895  (threshold: 0.4) → CONFIDENT
+
+Query: "cách gộp hồ sơ bệnh nhân trùng"
+[RERANKER] After reranking (top 3):
+  #1  score=0.6997 | Cách gộp mã bệnh nhân
+  #2  score=0.0874 | Cách lưu trữ hồ sơ
+  #3  score=0.0400 | Cách chỉ định bệnh nhân khám kết hợp
+[RERANKER] Top score: 0.6997  (threshold: 0.4) → CONFIDENT
+```
+
+### Test output: `core/fallback.py` ✅
+
+```
+[FALLBACK] Case 1: Ambiguous question (1 words) → asking for clarification
+[TEST] Input: 'huh??'
+[TEST] Response: Bạn có thể mô tả chi tiết hơn vấn đề không?...
+
+[FALLBACK] Case 2: Already clarified, still no match → escalating
+[TEST] Response: Vấn đề này chưa có trong tài liệu hướng dẫn hiện tại...
+
+[FALLBACK] Case 3: Clear question but not in FAQ → escalating
+[TEST] Response: Vấn đề này chưa có trong tài liệu hướng dẫn hiện tại...
+```
+
+### Test output: `core/query_rewriter.py` ⚠️ (vLLM not running)
+
+```
+[REWRITER] Original : "merge patient records how?"
+[REWRITER] vLLM unavailable (APIConnectionError), using original query
+```
+
+Graceful degradation: returns original query when vLLM is unavailable.
+
+### Test output: `core/generator.py` ⚠️ (vLLM not running)
+
+```
+[GENERATOR] Context chunks: 1
+[GENERATOR] Prompt length: ~190 chars
+[GENERATOR] vLLM unavailable (APIConnectionError: Connection error.)
+[GENERATOR] Final answer: Lỗi: Không thể kết nối đến LLM server. Vui lòng thử lại sau.
+```
+
+### Test output: Full pipeline ✅
+
+```
+[PIPELINE] Input: "in bảng kê khám bệnh ở đâu"
+[REWRITER] vLLM unavailable, using original query
+[RETRIEVER] Top 10 chunks retrieved (top: 0.733)
+[RERANKER] After reranking (top 3):
+  #1  score=0.9895 | in bảng kê khám bệnh, chữa bệnh tìm ở đâu
+[RERANKER] Top score: 0.9895 → CONFIDENT
+[GENERATOR] vLLM unavailable
+[PIPELINE] Done. confidence=0.9895 fallback=False
+```
+
+Pipeline correctly: retrieves → reranks → passes confidence check → attempts generation.
+Only vLLM connection is missing (server not started yet).
+
+### Notes
+
+- vLLM server needs to be started for query_rewriter and generator to produce real output
+- All other steps (retriever, reranker, confidence, fallback) work independently
+- Reranker dramatically improves quality: vector score 0.733 → reranker score 0.9895
+- Pipeline gracefully degrades without vLLM — no crashes, clear error messages
+
+---
+
+## Next: Phase 3 — Adapter Layer + FastAPI Gateway
