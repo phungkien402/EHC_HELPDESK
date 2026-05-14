@@ -49,7 +49,7 @@ def embed_and_store(docs: list[Document], recreate: bool = False) -> int:
 
     # Load embedding model
     print(f"[EMBEDDER] Loading model: {EMBED_MODEL}")
-    model = SentenceTransformer(EMBED_MODEL)
+    model = SentenceTransformer(EMBED_MODEL, device='cpu')
 
     # Generate embeddings in batches
     print(f"[EMBEDDER] Encoding {len(chunk_texts)} texts (batch_size=32)...")
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     print(f"\n--- Sanity Check ---")
     print("Test query: 'in bảng kê khám bệnh ở đâu'")
 
-    model = SentenceTransformer(EMBED_MODEL)
+    model = SentenceTransformer(EMBED_MODEL, device='cpu')
     query_vector = model.encode("in bảng kê khám bệnh ở đâu").tolist()
 
     client = QdrantClient(url=QDRANT_URL)
