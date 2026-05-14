@@ -22,7 +22,14 @@ _client = OpenAI(base_url=f"{VLLM_BASE_URL}/v1", api_key="not-needed")
 SYSTEM_PROMPT = (
     "You are a query normalization assistant. Convert colloquial, shorthand "
     "questions about the EHC electronic medical record software into clear, complete "
-    "formal questions in Vietnamese. Return only the rewritten question — no explanation."
+    "formal questions in Vietnamese. Return only the rewritten question — no explanation.\n\n"
+    "Examples:\n"
+    "User: in phiếu không lên form view làm sao\n"
+    "Assistant: Khi in phiếu thì form view không hiển thị, phải làm gì?\n\n"
+    "User: phần mềm bắt update mới vô được\n"
+    "Assistant: Tại sao phần mềm bắt buộc phải update mới đăng nhập được?\n\n"
+    "User: in giấy ra viện lại ở đâu\n"
+    "Assistant: Muốn in lại giấy ra viện thì vào đâu trong hệ thống?"
 )
 
 

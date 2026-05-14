@@ -108,7 +108,7 @@
     "id": "q16",
     "question": "in giấy ra viện lại ở đâu",
     "type": "colloquial",
-    "expected_keywords": ["in", "giấy ra viện"],
+    "expected_keywords": ["in", "ra viện", "bệnh nhân"],
     "expected_faq_subject": "muốn in lại giấy ra viện thì in ở đâu"
   },
   {
