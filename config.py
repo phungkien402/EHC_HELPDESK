@@ -62,6 +62,10 @@ TELEGRAM_BOT_TOKEN = _get("TELEGRAM_BOT_TOKEN", "")
 ZALO_OA_SECRET = _get("ZALO_OA_SECRET", "")
 ZALO_ACCESS_TOKEN = _get("ZALO_ACCESS_TOKEN", "")
 
+# --- Slack ---
+SLACK_BOT_TOKEN = _get("SLACK_BOT_TOKEN", "")
+SLACK_SIGNING_SECRET = _get("SLACK_SIGNING_SECRET", "")
+
 
 if __name__ == "__main__":
     print("=== EHC Helpdesk Configuration ===")
@@ -80,4 +84,6 @@ if __name__ == "__main__":
     print(f"TELEGRAM_BOT_TOKEN : {'***set***' if TELEGRAM_BOT_TOKEN else '(not set)'}")
     print(f"ZALO_OA_SECRET     : {'***set***' if ZALO_OA_SECRET else '(not set)'}")
     print(f"ZALO_ACCESS_TOKEN  : {'***set***' if ZALO_ACCESS_TOKEN else '(not set)'}")
+    print(f"SLACK_BOT_TOKEN    : {'***set***' if SLACK_BOT_TOKEN else '(not set)'}")
+    print(f"SLACK_SIGNING_SECRET: {'***set***' if SLACK_SIGNING_SECRET else '(not set)'}")
     print("\n✓ All required variables loaded successfully.")

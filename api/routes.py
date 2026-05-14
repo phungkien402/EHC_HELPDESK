@@ -26,6 +26,7 @@ from api.logger import QueryLogger
 from adapters.telegram_adapter import TelegramAdapter
 from adapters.zalo_adapter import ZaloAdapter
 from adapters.web_adapter import WebAdapter
+from adapters.slack_adapter import SlackAdapter
 
 app = FastAPI(title="EHC AI Helpdesk")
 
@@ -46,6 +47,7 @@ _adapters = {
     "telegram": TelegramAdapter(),
     "zalo": ZaloAdapter(),
     "web": WebAdapter(),
+    "slack": SlackAdapter(),
 }
 
 
@@ -82,6 +84,10 @@ async def handle_webhook(platform: str, request: Request, background_tasks: Back
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
+    # Handle Slack URL verification challenge
+    if platform == "slack" and raw.get("type") == "url_verification":
+        return {"challenge": raw.get("challenge")}
+
     # Parse into Message
     message = adapter.parse_message(raw)
     if message is None:
@@ -107,13 +113,16 @@ async def handle_webhook(platform: str, request: Request, background_tasks: Back
         confidence=0.0 if answer.is_fallback else answer.confidence,
     )
 
-    # Send response back via platform API (async, in background for Telegram/Zalo)
+    # Send response back via platform API (async, in background for Telegram/Zalo/Slack)
     if platform != "web":
-        # For Telegram/Zalo, send via their API in background
+        # For Telegram/Zalo/Slack, send via their API in background
         chat_id = message.user_id
         if platform == "telegram":
             # Use chat_id from session_id (tg_{chat_id})
             chat_id = message.session_id.replace("tg_", "")
+        elif platform == "slack":
+            # Use channel_id from session_id (slack_{channel_id})
+            chat_id = message.session_id.replace("slack_", "")
         background_tasks.add_task(adapter.send_message, chat_id, response_text)
 
     # Return response (used directly by web adapter)
