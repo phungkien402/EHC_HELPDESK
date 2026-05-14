@@ -21,7 +21,7 @@ from core.models import RetrievedChunk
 
 # Module-level singletons — loaded once when module is first imported
 print(f"[RETRIEVER] Loading embedding model: {EMBED_MODEL}")
-_model = SentenceTransformer(EMBED_MODEL)
+_model = SentenceTransformer(EMBED_MODEL, device='cpu')
 _client = QdrantClient(url=QDRANT_URL)
 
 

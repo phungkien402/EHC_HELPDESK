@@ -21,7 +21,7 @@ from core.models import RetrievedChunk
 
 # Module-level singleton — loaded once when module is first imported
 print(f"[RERANKER] Loading model: {RERANKER_MODEL}")
-_reranker = FlagReranker(RERANKER_MODEL, use_fp16=False)
+_reranker = FlagReranker(RERANKER_MODEL, use_fp16=False, device='cpu')
 
 
 def rerank(query: str, chunks: list[RetrievedChunk], top_n: int = None) -> list[RetrievedChunk]:
