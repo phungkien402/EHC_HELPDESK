@@ -37,8 +37,8 @@ SYSTEM_PROMPT = (
 )
 
 
-def _build_user_prompt(query: str, chunks: list[RetrievedChunk]) -> str:
-    """Build the user prompt with context chunks and question."""
+def _build_user_prompt(query: str, chunks: list[RetrievedChunk], history: list[dict] = None) -> str:
+    """Build the user prompt with context chunks, conversation history, and question."""
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
         label = "[PRIMARY REFERENCE]" if i == 1 else f"[SUPPLEMENTARY {i}]"
@@ -46,14 +46,25 @@ def _build_user_prompt(query: str, chunks: list[RetrievedChunk]) -> str:
 
     context = "\n\n---\n\n".join(context_parts)
 
+    # Add last 2 turns of history if available
+    history_text = ""
+    if history:
+        recent = history[-4:]  # last 2 turns = 4 entries (user+bot x2)
+        history_lines = []
+        for turn in recent:
+            role = "User" if turn["role"] == "user" else "Assistant"
+            history_lines.append(f"{role}: {turn['text']}")
+        history_text = "\nCONVERSATION HISTORY (for context only):\n" + "\n".join(history_lines) + "\n\n"
+
     return (
         f"CONTEXT:\n{context}\n\n---\n\n"
+        f"{history_text}"
         f"QUESTION: {query}\n\n"
         f"Note: Answer based primarily on the [PRIMARY REFERENCE] above."
     )
 
 
-def generate(query: str, chunks: list[RetrievedChunk]) -> str:
+def generate(query: str, chunks: list[RetrievedChunk], history: list[dict] = None) -> str:
     """
     Generate an answer grounded in the provided chunks.
     Returns the answer text string.
@@ -61,7 +72,7 @@ def generate(query: str, chunks: list[RetrievedChunk]) -> str:
     """
     print(f"[GENERATOR] Context chunks: {len(chunks)}")
 
-    user_prompt = _build_user_prompt(query, chunks)
+    user_prompt = _build_user_prompt(query, chunks, history)
     print(f"[GENERATOR] Prompt length: ~{len(user_prompt)} chars")
 
     try:

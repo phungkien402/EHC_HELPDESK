@@ -31,6 +31,10 @@ from core.models import Message
 from config import SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET
 
 
+# Module-level dict to store thread_ts for replies (session_id -> event ts)
+_pending_thread_ts: dict[str, str] = {}
+
+
 class SlackAdapter(BaseAdapter):
 
     def parse_message(self, raw: dict) -> Message | None:
@@ -55,14 +59,19 @@ class SlackAdapter(BaseAdapter):
 
         user_id = event.get("user", "")
         channel_id = event.get("channel", "")
-        ts = float(event.get("ts", time.time()))
+        ts_str = event.get("ts", "")
+        ts = float(ts_str) if ts_str else time.time()
 
         if not user_id or not channel_id:
             return None
 
+        # Store thread_ts so send_message can reply in-thread
+        session_id = f"slack_{channel_id}"
+        _pending_thread_ts[session_id] = ts_str
+
         return Message(
             user_id=user_id,
-            session_id=f"slack_{channel_id}",
+            session_id=session_id,
             text=text,
             timestamp=ts,
             platform="slack",
@@ -75,7 +84,7 @@ class SlackAdapter(BaseAdapter):
         return answer_text
 
     async def send_message(self, channel_id: str, text: str) -> None:
-        """Send message via Slack Web API (chat.postMessage)."""
+        """Send message via Slack Web API (chat.postMessage), replying in-thread."""
         if not SLACK_BOT_TOKEN:
             print("[SLACK] No bot token configured, skipping send")
             return
@@ -90,13 +99,19 @@ class SlackAdapter(BaseAdapter):
             "text": text,
         }
 
+        # Reply in-thread if we have the original message ts
+        session_key = f"slack_{channel_id}"
+        thread_ts = _pending_thread_ts.pop(session_key, None)
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(url, json=payload, headers=headers)
             data = resp.json()
             if not data.get("ok"):
                 print(f"[SLACK] Send failed: {data.get('error', 'unknown')}")
             else:
-                print(f"[SLACK] Message sent to {channel_id}")
+                print(f"[SLACK] Message sent to {channel_id} (thread={thread_ts or 'none'})")
 
     @staticmethod
     def verify_signature(

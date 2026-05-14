@@ -50,7 +50,7 @@ def run(message: Message, session_history: list) -> Answer:
         return fallback.handle(message, session_history)
 
     # Step 5: Generate grounded answer
-    answer_text = generator.generate(rewritten, ranked_chunks)
+    answer_text = generator.generate(rewritten, ranked_chunks, session_history)
 
     answer = Answer(
         text=answer_text,
