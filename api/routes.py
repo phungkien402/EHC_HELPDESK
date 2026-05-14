@@ -50,6 +50,9 @@ _adapters = {
     "slack": SlackAdapter(),
 }
 
+# Slack event deduplication
+_processed_slack_events: set[str] = set()
+
 
 @app.get("/health")
 def health():
@@ -87,6 +90,16 @@ async def handle_webhook(platform: str, request: Request, background_tasks: Back
     # Handle Slack URL verification challenge
     if platform == "slack" and raw.get("type") == "url_verification":
         return {"challenge": raw.get("challenge")}
+
+    # Slack deduplication — ignore retried events
+    if platform == "slack":
+        event_id = raw.get("event_id", "")
+        if event_id and event_id in _processed_slack_events:
+            return {"status": "duplicate"}
+        if event_id:
+            _processed_slack_events.add(event_id)
+            if len(_processed_slack_events) > 1000:
+                _processed_slack_events.clear()
 
     # Parse into Message
     message = adapter.parse_message(raw)
