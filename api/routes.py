@@ -134,8 +134,8 @@ async def handle_webhook(platform: str, request: Request, background_tasks: Back
             # Use chat_id from session_id (tg_{chat_id})
             chat_id = message.session_id.replace("tg_", "")
         elif platform == "slack":
-            # Use channel_id from session_id (slack_{channel_id})
-            chat_id = message.session_id.replace("slack_", "")
+            # Pass full session_id; adapter will extract channel and thread_ts
+            chat_id = message.session_id
         background_tasks.add_task(adapter.send_message, chat_id, response_text)
 
     # Return response (used directly by web adapter)

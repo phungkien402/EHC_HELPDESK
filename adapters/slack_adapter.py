@@ -66,7 +66,7 @@ class SlackAdapter(BaseAdapter):
             return None
 
         # Store thread_ts so send_message can reply in-thread
-        session_id = f"slack_{channel_id}"
+        session_id = f"slack_{channel_id}_{user_id}"
         _pending_thread_ts[session_id] = ts_str
 
         return Message(
@@ -94,14 +94,19 @@ class SlackAdapter(BaseAdapter):
             "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
             "Content-Type": "application/json",
         }
-        payload = {
-            "channel": channel_id,
-            "text": text,
-        }
+
+        # channel_id may be full session_id like "slack_C12345_U67890"
+        # extract actual channel for Slack API
+        parts = channel_id.replace("slack_", "").split("_")
+        actual_channel = parts[0]  # first part is channel ID
 
         # Reply in-thread if we have the original message ts
-        session_key = f"slack_{channel_id}"
-        thread_ts = _pending_thread_ts.pop(session_key, None)
+        thread_ts = _pending_thread_ts.pop(channel_id, None)
+
+        payload = {
+            "channel": actual_channel,
+            "text": text,
+        }
         if thread_ts:
             payload["thread_ts"] = thread_ts
 
@@ -111,7 +116,7 @@ class SlackAdapter(BaseAdapter):
             if not data.get("ok"):
                 print(f"[SLACK] Send failed: {data.get('error', 'unknown')}")
             else:
-                print(f"[SLACK] Message sent to {channel_id} (thread={thread_ts or 'none'})")
+                print(f"[SLACK] Message sent to {actual_channel} (thread={thread_ts or 'none'})")
 
     @staticmethod
     def verify_signature(
@@ -153,7 +158,7 @@ if __name__ == "__main__":
     print(f"Parsed: {msg}")
     assert msg is not None
     assert msg.text == "in phiếu không lên form view"
-    assert msg.session_id == "slack_C67890"
+    assert msg.session_id == "slack_C67890_U12345"
     assert msg.platform == "slack"
 
     # Test ignore non-mention events
