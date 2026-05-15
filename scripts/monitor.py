@@ -16,7 +16,6 @@ Usage:
     python3 scripts/monitor.py
 """
 
-import json
 import os
 import smtplib
 import subprocess
@@ -64,15 +63,13 @@ def check_health(url: str) -> tuple[bool, str]:
     """
     Check a service health endpoint.
     Returns (is_healthy, detail_message).
+    Only checks HTTP 200 status — does not parse response body.
     """
     try:
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             if resp.status == 200:
-                body = json.loads(resp.read().decode())
-                if body.get("status") == "ok":
-                    return True, "OK"
-                return False, f"Unexpected response: {body}"
+                return True, "OK"
             return False, f"HTTP {resp.status}"
     except urllib.error.URLError as e:
         return False, f"Connection failed: {e.reason}"
