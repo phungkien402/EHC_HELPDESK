@@ -50,7 +50,15 @@ EPOCHS = 3
 BATCH_SIZE = 16
 LEARNING_RATE = 2e-5
 MAX_SEQ_LENGTH = 512
-DEVICE = "cpu"
+
+# Device selection: prefer CUDA if available
+import torch
+if torch.cuda.is_available():
+    DEVICE = "cuda"
+    print(f"[CONFIG] GPU detected: {torch.cuda.get_device_name(0)}")
+else:
+    DEVICE = "cpu"
+    print("[CONFIG] WARNING: CUDA not available, falling back to CPU (training will be slow)")
 
 # --- Generation config ---
 GENERATION_SYSTEM_PROMPT = (
