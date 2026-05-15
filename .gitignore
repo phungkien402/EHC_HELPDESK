@@ -20,3 +20,6 @@ logs/*.jsonl
 
 # Model cache
 models/
+
+# Server-specific service files (contain credentials)
+scripts/ehc-monitor.service
