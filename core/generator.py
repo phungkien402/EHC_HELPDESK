@@ -36,37 +36,43 @@ SYSTEM_PROMPT = (
     "4. Trả lời bằng tiếng Việt, xưng \"mình\" hoặc không xưng, gọi người hỏi là \"bạn\".\n"
     "5. Giọng văn thân thiện, như đồng nghiệp hỗ trợ nhau — không quá trang trọng, "
     "không dùng \"người dùng\", không mở đầu bằng \"Để... bạn hãy thực hiện theo các bước sau:\".\n"
-    "6. Đa dạng cách mở đầu: có thể bắt đầu bằng giải thích nguyên nhân, hoặc đi thẳng vào hướng dẫn.\n"
-    "7. Kết thúc bằng: \"Nếu vẫn gặp khó khăn, bạn có thể liên hệ thêm nhé!\"\n"
-    "8. Không hỏi lại trừ khi câu hỏi thực sự mơ hồ."
+    "6. Bắt đầu câu trả lời bằng cách acknowledge vấn đề của người dùng (1 câu ngắn), "
+    "sau đó hướng dẫn giải quyết. Ví dụ: \"À, vấn đề màn hình xoay này thường xảy ra khi... "
+    "Bạn thử làm theo các bước sau nhé:\"\n"
+    "7. Đa dạng cách mở đầu: có thể bắt đầu bằng giải thích nguyên nhân, hoặc đi thẳng vào hướng dẫn.\n"
+    "8. Kết thúc bằng: \"Nếu vẫn gặp khó khăn, bạn có thể liên hệ thêm nhé!\"\n"
+    "9. Không hỏi lại trừ khi câu hỏi thực sự mơ hồ."
 )
 
 
-def _build_user_prompt(query: str, chunks: list[RetrievedChunk], history: list[dict] = None) -> str:
-    """Build the user prompt with context chunks, conversation history, and question."""
+def _build_user_prompt(query: str, chunks: list[RetrievedChunk], history: list[dict] = None, user_intent: str = None) -> str:
+    """Build the user prompt with context chunks, conversation history, intent, and question."""
+    parts = []
+
+    # Inject user intent at the top if available
+    if user_intent:
+        parts.append(f"[USER INTENT] {user_intent}\n")
+
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
         label = "[PRIMARY REFERENCE]" if i == 1 else f"[SUPPLEMENTARY {i}]"
         context_parts.append(f"{label}\n{chunk.text}")
 
     context = "\n\n---\n\n".join(context_parts)
+    parts.append(f"CONTEXT:\n{context}")
 
     # Add last 2 turns of history if available
-    history_text = ""
     if history:
         recent = history[-4:]  # last 2 turns = 4 entries (user+bot x2)
         history_lines = []
         for turn in recent:
             role = "User" if turn["role"] == "user" else "Assistant"
             history_lines.append(f"{role}: {turn['text']}")
-        history_text = "\nCONVERSATION HISTORY (for context only):\n" + "\n".join(history_lines) + "\n\n"
+        parts.append("\nCONVERSATION HISTORY (for context only):\n" + "\n".join(history_lines))
 
-    return (
-        f"CONTEXT:\n{context}\n\n---\n\n"
-        f"{history_text}"
-        f"QUESTION: {query}\n\n"
-        f"Note: Answer based primarily on the [PRIMARY REFERENCE] above."
-    )
+    parts.append(f"\n---\n\nQUESTION: {query}\n\nNote: Answer based primarily on the [PRIMARY REFERENCE] above.")
+
+    return "\n".join(parts)
 
 
 class GeneratorError(Exception):
@@ -74,15 +80,17 @@ class GeneratorError(Exception):
     pass
 
 
-def generate(query: str, chunks: list[RetrievedChunk], history: list[dict] = None) -> str:
+def generate(query: str, chunks: list[RetrievedChunk], history: list[dict] = None, user_intent: str = None) -> str:
     """
     Generate an answer grounded in the provided chunks.
     Returns the answer text string.
     Raises GeneratorError if vLLM is unavailable.
     """
     print(f"[GENERATOR] Context chunks: {len(chunks)}")
+    if user_intent:
+        print(f"[GENERATOR] User intent: \"{user_intent}\"")
 
-    user_prompt = _build_user_prompt(query, chunks, history)
+    user_prompt = _build_user_prompt(query, chunks, history, user_intent=user_intent)
     print(f"[GENERATOR] Prompt length: ~{len(user_prompt)} chars")
 
     try:

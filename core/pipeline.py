@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import RETRIEVER_TOP_K, RERANKER_TOP_N, CONFIDENCE_THRESHOLD
 from core.models import Message, Answer
 from core import query_rewriter, retriever, reranker, generator, confidence, fallback
+from core.query_rewriter import analyze_intent
 from core.generator import GeneratorError
 
 
@@ -27,6 +28,9 @@ def run(message: Message, session_history: list) -> Answer:
     print(f"\n{'='*60}")
     print(f"[PIPELINE] Input: \"{message.text}\"")
     print(f"{'='*60}")
+
+    # Step 0: Analyze user intent (silently skip if vLLM unavailable)
+    user_intent = analyze_intent(message.text)
 
     # Step 1: Rewrite the query
     rewritten = query_rewriter.rewrite(message.text)
@@ -52,7 +56,7 @@ def run(message: Message, session_history: list) -> Answer:
 
     # Step 5: Generate grounded answer
     try:
-        answer_text = generator.generate(rewritten, ranked_chunks, session_history)
+        answer_text = generator.generate(rewritten, ranked_chunks, session_history, user_intent=user_intent)
     except GeneratorError:
         print("[PIPELINE] Generator failed (vLLM unavailable) → fallback")
         return fallback.handle(message, session_history)

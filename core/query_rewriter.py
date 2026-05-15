@@ -59,6 +59,42 @@ def _build_messages(text: str) -> list[dict]:
     return messages
 
 
+INTENT_PROMPT = (
+    "Bạn là trợ lý phân tích ý định người dùng cho phần mềm bệnh án điện tử EHC.\n"
+    "Đọc tin nhắn của người dùng và mô tả ngắn gọn (1 câu) vấn đề họ đang gặp phải.\n"
+    "Viết ở ngôi thứ 3, ví dụ: \"Bác sĩ đang gặp lỗi màn hình xoay liên tục khi xử trí bệnh nhân.\"\n"
+    "Chỉ trả về 1 câu mô tả — không giải thích thêm."
+)
+
+
+def analyze_intent(query: str) -> str | None:
+    """
+    Analyze user intent — returns a 1-sentence Vietnamese description of the
+    user's problem for internal use (injected into generator prompt).
+    Returns None if vLLM is unavailable.
+    """
+    print(f"[INTENT] Analyzing: \"{query}\"")
+
+    try:
+        response = _client.chat.completions.create(
+            model=VLLM_MODEL,
+            messages=[
+                {"role": "system", "content": INTENT_PROMPT},
+                {"role": "user", "content": query},
+            ],
+            max_tokens=100,
+            temperature=0.1,
+        )
+
+        intent = response.choices[0].message.content.strip()
+        print(f"[INTENT] Result: \"{intent}\"")
+        return intent
+
+    except Exception as e:
+        print(f"[INTENT] vLLM unavailable ({type(e).__name__}), skipping intent analysis")
+        return None
+
+
 def rewrite(text: str) -> str:
     """
     Rewrite a colloquial question into a clear intent statement.
