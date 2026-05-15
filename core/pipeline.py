@@ -1,13 +1,12 @@
 """
 RAG Pipeline orchestrator — iterative retrieval.
-Accepts a standard Message object, runs it through 7 steps:
+Accepts a standard Message object, runs it through 6 steps:
   1. Fast Retrieve (top 3, no rerank) — get initial context
-  2. Contextual Intent Analysis — LLM analyzes intent with chunk context
-  3. Query Rewrite — informed by grounded intent
-  4. Full Retrieve (top K) — embed rewritten query
-  5. Rerank (top N) — cross-encoder rescore
-  6. Confidence Check — route to fallback if below threshold
-  7. Generate — grounded answer with user intent acknowledgment
+  2. Analyze + Rewrite (single LLM call) — intent & formal query
+  3. Full Retrieve (top K) — embed rewritten query
+  4. Rerank (top N) — cross-encoder rescore
+  5. Confidence Check — route to fallback if below threshold
+  6. Generate — grounded answer with user intent acknowledgment
 
 Why iterative: LLM needs EHC context to analyze intent accurately —
 blind intent analysis is ineffective for domain-specific terminology.
@@ -24,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import RETRIEVER_TOP_K, RERANKER_TOP_N, CONFIDENCE_THRESHOLD, MAINTENANCE_MODE
 from core.models import Message, Answer
 from core import query_rewriter, retriever, reranker, generator, confidence, fallback
-from core.query_rewriter import analyze_intent
+from core.query_rewriter import analyze_and_rewrite
 from core.generator import GeneratorError
 
 # --- Maintenance mode (toggled at runtime via /admin/maintenance) ---
@@ -53,12 +52,11 @@ def run(message: Message, session_history: list) -> Answer:
     Execute the full RAG pipeline on a message.
     Iterative retrieval flow:
       1. Fast retrieve (top 3, no rerank) for context
-      2. Contextual intent analysis (LLM + chunks)
-      3. Rewrite query (informed by grounded intent)
-      4. Full retrieve (top K)
-      5. Rerank (top N)
-      6. Confidence check
-      7. Generate grounded answer
+      2. Analyze + rewrite (single LLM call)
+      3. Full retrieve (top K)
+      4. Rerank (top N)
+      5. Confidence check
+      6. Generate grounded answer
     """
     # Short-circuit if maintenance mode is active
     if _maintenance_mode:
@@ -79,41 +77,37 @@ def run(message: Message, session_history: list) -> Answer:
     print(f"\n[PIPELINE] Step 1: Fast retrieve (top 3)")
     fast_chunks = retriever.retrieve(message.text, top_k=3)
 
-    # Step 2: Contextual intent analysis — use fast chunks as context
-    print(f"\n[PIPELINE] Step 2: Contextual intent analysis")
+    # Step 2: Analyze intent + rewrite query in a single LLM call
+    print(f"\n[PIPELINE] Step 2: Analyze + Rewrite (single call)")
     if fast_chunks:
-        user_intent = analyze_intent(message.text, chunks=fast_chunks)
+        user_intent, rewritten = analyze_and_rewrite(message.text, chunks=fast_chunks)
     else:
-        # No chunks found — fall back to blind analysis
-        user_intent = analyze_intent(message.text)
+        user_intent, rewritten = analyze_and_rewrite(message.text)
+    print(f"[PIPELINE] analyze_and_rewrite: intent=\"{user_intent}\" query=\"{rewritten}\"")
 
-    # Step 3: Rewrite query (now informed by grounded intent)
-    print(f"\n[PIPELINE] Step 3: Rewrite query")
-    rewritten = query_rewriter.rewrite(message.text)
-
-    # Step 4: Full retrieve with rewritten query
-    print(f"\n[PIPELINE] Step 4: Full retrieve (top {RETRIEVER_TOP_K})")
+    # Step 3: Full retrieve with rewritten query
+    print(f"\n[PIPELINE] Step 3: Full retrieve (top {RETRIEVER_TOP_K})")
     chunks = retriever.retrieve(rewritten, top_k=RETRIEVER_TOP_K)
 
     if not chunks:
         print("[PIPELINE] No chunks retrieved → fallback")
         return fallback.handle(message, session_history)
 
-    # Step 5: Rerank candidates
-    print(f"\n[PIPELINE] Step 5: Rerank (top {RERANKER_TOP_N})")
+    # Step 4: Rerank candidates
+    print(f"\n[PIPELINE] Step 4: Rerank (top {RERANKER_TOP_N})")
     ranked_chunks = reranker.rerank(rewritten, chunks, top_n=RERANKER_TOP_N)
 
     if not ranked_chunks:
         print("[PIPELINE] No chunks after reranking → fallback")
         return fallback.handle(message, session_history)
 
-    # Step 6: Check confidence
+    # Step 5: Check confidence
     if not confidence.is_confident(ranked_chunks[0], threshold=CONFIDENCE_THRESHOLD):
         print(f"[PIPELINE] Low confidence ({ranked_chunks[0].score:.4f} < {CONFIDENCE_THRESHOLD}) → fallback")
         return fallback.handle(message, session_history)
 
-    # Step 7: Generate grounded answer
-    print(f"\n[PIPELINE] Step 7: Generate answer")
+    # Step 6: Generate grounded answer
+    print(f"\n[PIPELINE] Step 6: Generate answer")
     try:
         answer_text = generator.generate(rewritten, ranked_chunks, session_history, user_intent=user_intent)
     except GeneratorError:
