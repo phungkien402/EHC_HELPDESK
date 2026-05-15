@@ -1,85 +1,114 @@
-# EHC Helpdesk — Working Agreement
+# CLAUDE.md
 
-## Project Structure
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-- `/plan/` — Phase specs (PHASE_0.md through PHASE_5.md) and OVERVIEW.md. Read the relevant phase file before starting any work.
-- `/docs/` — Progress reports (PROGRESS.md). Update after each phase.
-- `/core/` — RAG pipeline (query_rewriter, retriever, reranker, generator, confidence, fallback, pipeline)
-- `/data/` — Data layer (ingestor, embedder, reindex)
-- `/adapters/` — Platform adapters (telegram, zalo, web)
-- `/api/` — FastAPI routes, session manager, query logger
-- `/ui/` — Single-file web chat UI + admin panel
-- `/tests/` — Evaluation script and eval set
+## Project Overview
 
-## How to Run
+EHC AI Helpdesk — an on-premise RAG chatbot that answers doctors' questions about EHC electronic medical record software by looking up an internal FAQ knowledge base stored in Redmine. Runs 100% on-premise (Dell R730xd, 2x V100 16GB, Ubuntu). Vietnamese language is primary.
+
+## Architecture
+
+```
+Platform (Zalo/Telegram/Web) → Adapter → FastAPI Gateway → RAG Pipeline → Response
+```
+
+RAG Pipeline (5 steps in `core/pipeline.py`):
+1. Query Rewriter (`core/query_rewriter.py`) — colloquial Vietnamese → formal query via LLM
+2. Retriever (`core/retriever.py`) — embed query with bge-m3, fetch Top-K from Qdrant
+3. Reranker (`core/reranker.py`) — cross-encoder rescore with bge-reranker-v2-m3, keep Top-N
+4. Generator (`core/generator.py`) — vLLM (Qwen2.5-7B-Instruct) generates grounded answer
+5. Confidence Check (`core/confidence.py`) — route to fallback if top score < threshold
+
+Key separation: `core/` never imports from `adapters/`. Only `api/routes.py` bridges them.
+
+## Tech Stack
+
+- LLM: Qwen2.5-7B-Instruct via vLLM (OpenAI-compatible API at `VLLM_BASE_URL`)
+- Embeddings: BAAI/bge-m3 (1024-dim vectors)
+- Reranker: BAAI/bge-reranker-v2-m3
+- Vector DB: Qdrant
+- Backend: Python 3.11 + FastAPI
+- No LangChain/LlamaIndex — plain Python, every step inspectable
+
+## Commands
+
+**IMPORTANT: The shell environment lacks PATH — only `/bin/bash` works. Use the patterns below.**
 
 ```bash
-# Always use run.sh to execute Python — the server PATH is restricted
-bash run.sh data/ingestor.py
-bash run.sh -m data.embedder
-bash run.sh -m core.pipeline
+# --- Shell/system commands (git, ls, find, etc.) ---
+# Always use /bin/bash -c with exported PATH:
+/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && <command>"
 
-# Or set PATH explicitly
-export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Examples:
+/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && git status"
+/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && ls -la"
+
+# --- Python commands ---
+# Use run.sh (sets PATH + cd into project + runs python3):
+/bin/bash /home/phungkien/EHC_HELPDESK/ehc-helpdesk/run.sh -m data.ingestor
+/bin/bash /home/phungkien/EHC_HELPDESK/ehc-helpdesk/run.sh -m data.embedder
+/bin/bash /home/phungkien/EHC_HELPDESK/ehc-helpdesk/run.sh -m data.reindex
+/bin/bash /home/phungkien/EHC_HELPDESK/ehc-helpdesk/run.sh -m data.reindex --diff
+/bin/bash /home/phungkien/EHC_HELPDESK/ehc-helpdesk/run.sh -m core.pipeline
+/bin/bash /home/phungkien/EHC_HELPDESK/ehc-helpdesk/run.sh -m tests.evaluate
+/bin/bash /home/phungkien/EHC_HELPDESK/ehc-helpdesk/run.sh -m tests.debug_query "your question"
+
+# Server
+/bin/bash /home/phungkien/EHC_HELPDESK/ehc-helpdesk/run.sh -m uvicorn api.routes:app --host 0.0.0.0 --port 8080
+
+# Prerequisites
+# Qdrant: docker run -d -p 6333:6333 --name qdrant qdrant/qdrant
+# vLLM:  /bin/bash run.sh -m vllm.entrypoints.openai.api_server --model Qwen/Qwen2.5-7B-Instruct
 ```
 
-## Key Technical Decisions
+## Git Workflow
 
-- **No LangChain/LlamaIndex** — plain Python RAG for full control and easy debugging
-- **Module-level singletons** — models loaded once at import time (`_model`, `_client`, `_reranker`), never per-request
-- **CPU for embedding/reranker** — bge-m3 and bge-reranker-v2-m3 forced to `device='cpu'` to free GPU VRAM for vLLM
-- **Always embed `subject + description` together** — FAQ descriptions avg 123 chars, too short alone
-- **`upsert` not `insert`** — re-running embedder is always safe, no duplicates
-- **`recreate=False` by default** in `embed_and_store()` — never accidentally wipe production data
-- **Adapter pattern** — `core/` never imports from `adapters/`. Only `api/routes.py` uses adapters.
-- **Generator prompt** — labels chunks as `[PRIMARY REFERENCE]` and `[SUPPLEMENTARY N]` to prevent wrong-chunk answers; instructs LLM to expand short FAQ paths into numbered steps
-- **`run.sh`** — workaround for restricted PATH in this shell environment
+```bash
+# Git repo is at /home/phungkien/EHC_HELPDESK/ehc-helpdesk (not the parent folder)
+# Remote: git@github.com:phungkien402/EHC_HELPDESK.git (SSH)
 
-## Current Status
-
-All phases (0–5) complete. Evaluation: 22/22 passed (100%).
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| 0 | Project scaffold | ✅ |
-| 1 | Data layer (ingestor + embedder, 464 chunks) | ✅ |
-| 2 | RAG core pipeline | ✅ |
-| 3 | Adapter layer + FastAPI gateway | ✅ |
-| 4 | Web Chat UI + Admin Panel | ✅ |
-| 5 | RAG quality evaluation (22/22, 100%) | ✅ |
-
-## Post-Phase-5 Fixes Applied
-
-- `core/retriever.py` — `SentenceTransformer(EMBED_MODEL, device='cpu')`
-- `core/reranker.py` — `FlagReranker(RERANKER_MODEL, use_fp16=False, device='cpu')`
-- `core/generator.py` — improved SYSTEM_PROMPT rule 2 (expand short FAQ paths, don't refuse)
-- `core/generator.py` — `_build_user_prompt()` labels chunks as PRIMARY/SUPPLEMENTARY
-
-## Review Workflow
-
-This project is reviewed phase by phase by an external reviewer (via Cowork/Claude Desktop) before proceeding:
-
-1. Implement the phase per the spec in `/plan/`
-2. Commit and push to GitHub
-3. Reviewer checks the commit and either approves or lists fixes
-4. Fix issues, commit, push again
-5. Reviewer approves → proceed to next phase
-
-Do not start the next phase until the current phase is approved.
-
-## Commit Convention
-
-```
-feat: Phase N - short description
-fix: short description of what was fixed
-docs: what was updated
+# Always run git from the repo directory:
+/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK/ehc-helpdesk && git add -A && git status"
+/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK/ehc-helpdesk && git commit -m 'your message'"
+/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK/ehc-helpdesk && git push origin main"
 ```
 
-## Environment
+## Critical Design Decisions
 
-- OS: Ubuntu (Dell R730xd server)
-- GPU: 2x Tesla V100 16GB
-- Python: `/usr/bin/python3`
-- vLLM: `python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen2.5-7B-Instruct`
-- Qdrant: `docker run -p 6333:6333 qdrant/qdrant`
-- Project path: `/home/phungkien/EHC_HELPDESK/ehc-helpdesk/`
+- **Embedding text**: Always embed `subject + description` together (`f"Câu hỏi: {subject}\nHướng dẫn: {description}"`). Descriptions average only 123 chars; subject carries most semantic meaning.
+- **No chunking needed**: Each Redmine issue = one chunk (descriptions are too short to split).
+- **Upsert, not insert**: `data/embedder.py` uses Qdrant upsert so re-running is always safe.
+- **Arrow normalization**: Redmine descriptions use mixed `-->`, `=>`, `==>` — normalize all to `→`.
+- **Confidence threshold**: 0.40 default. Below this → fallback (no answer generated).
+- **Every module has `__main__`**: Each file must be independently runnable for testing.
+- **Verbose logging**: Every pipeline step must log inputs/outputs with scores.
+
+## Config
+
+All config via `.env` file loaded by `config.py`. Key variables:
+- `REDMINE_URL`, `REDMINE_API_KEY`, `REDMINE_PROJECT`
+- `VLLM_BASE_URL`, `VLLM_MODEL`
+- `EMBED_MODEL`, `RERANKER_MODEL`
+- `QDRANT_URL`, `QDRANT_COLLECTION`
+- `RETRIEVER_TOP_K` (default 10), `RERANKER_TOP_N` (default 3), `CONFIDENCE_THRESHOLD` (default 0.4)
+
+## Slack Slash Commands
+
+Implemented in `adapters/slack_adapter.py` → `handle_slash_command()`, routed from `api/routes.py` when Slack sends `application/x-www-form-urlencoded` POST to `/webhook/slack`.
+
+| Command | Description | Auth |
+|---------|-------------|------|
+| `/health` | Check vLLM, Qdrant, API status | Any user |
+| `/stats` | Last 24h: total questions, success rate, avg confidence | Any user |
+| `/top` | Top 5 most asked questions (7 days) | Any user |
+| `/clear` | Clear calling user's session history | Any user |
+| `/refresh` | Trigger Redmine reindex in background | Admin only (`SLACK_ADMIN_USERS`) |
+| `/create_ticket` | Log issue for manual review | Any user |
+
+Config: `SLACK_ADMIN_USERS` env var — comma-separated Slack user IDs (e.g. `U12345,U67890`).
+
+Response format: ephemeral JSON (`{"response_type": "ephemeral", "text": "..."}`). All commands respond within 3s.
+
+## Build Phases
+
+Phases are documented in `plan/PHASE_0.md` through `plan/PHASE_5.md`. Complete each phase sequentially — later phases depend on earlier ones being verified.
