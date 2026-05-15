@@ -182,8 +182,8 @@ def rewrite(text: str) -> str:
             raise LLMUnavailableError(str(retry_e)) from retry_e
 
     except Exception as e:
-        print(f"[REWRITER] vLLM unavailable ({type(e).__name__}), using original query")
-        return text
+        print(f"[REWRITER] vLLM unavailable ({type(e).__name__}), raising LLMUnavailableError")
+        raise LLMUnavailableError(str(e)) from e
 
 
 ANALYZE_AND_REWRITE_PROMPT = (
@@ -279,8 +279,8 @@ def analyze_and_rewrite(query: str, chunks: list = None) -> tuple[str | None, st
             raise LLMUnavailableError(str(retry_e)) from retry_e
 
     except Exception as e:
-        print(f"[ANALYZE+REWRITE] vLLM unavailable ({type(e).__name__}), using original query")
-        return None, query
+        print(f"[ANALYZE+REWRITE] vLLM unavailable ({type(e).__name__}), raising LLMUnavailableError")
+        raise LLMUnavailableError(str(e)) from e
 
 
 if __name__ == "__main__":
