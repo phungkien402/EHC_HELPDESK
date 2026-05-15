@@ -28,7 +28,13 @@ SYSTEM_PROMPT = (
     "2. Output a short statement (1 sentence), not a question.\n"
     "3. Use technical terms that would appear in a FAQ title.\n"
     "4. If the message is already a clear technical question, keep it as-is.\n"
-    "5. Output in Vietnamese. Return only the rewritten query — no explanation."
+    "5. Output in Vietnamese. Return only the rewritten query — no explanation.\n"
+    "6. Prefix selection:\n"
+    "   - Use \"Lỗi...\" ONLY when the input describes a system error, crash, malfunction, or "
+    "unexpected behavior (e.g. \"bị lỗi\", \"không lên\", \"xoay hoài\", \"bắt update\").\n"
+    "   - Use \"Cách...\" when the input is a how-to or navigation question "
+    "(e.g. \"bấm vào đâu\", \"làm sao\", \"ở đâu\", \"muốn làm\").\n"
+    "   - Use \"Vị trí...\" when asking where something is located in the UI."
 )
 
 FEW_SHOT_EXAMPLES = [
@@ -39,6 +45,7 @@ FEW_SHOT_EXAMPLES = [
     ("in giấy ra viện lại ở đâu", "Vị trí in lại giấy ra viện trong hệ thống"),
     ("xem giúp tôi hẹn bệnh nhân nhưng hệ thống tự nhảy vào thứ 7 chủ nhật", "Lỗi module đặt hẹn tự chọn sai ngày trong tuần"),
     ("BN ra viện rồi muốn sửa thông tin", "Cách sửa thông tin bệnh nhân sau khi đã xử trí ra viện"),
+    ("muốn hủy nhập viện thì bấm vào đâu", "Cách hủy nhập viện trong hệ thống EHC"),
 ]
 
 
