@@ -66,21 +66,46 @@ INTENT_PROMPT = (
     "Chỉ trả về 1 câu mô tả — không giải thích thêm."
 )
 
+CONTEXTUAL_INTENT_PROMPT = (
+    "Bạn là trợ lý hiểu phần mềm EHC. Dựa vào tài liệu tham khảo, "
+    "hãy mô tả ngắn gọn vấn đề người dùng đang gặp (1 câu).\n"
+    "Viết ở ngôi thứ 3, ví dụ: \"Bác sĩ đang gặp lỗi màn hình xoay liên tục khi xử trí bệnh nhân.\"\n"
+    "Chỉ trả về 1 câu mô tả — không giải thích thêm."
+)
 
-def analyze_intent(query: str) -> str | None:
+
+def analyze_intent(query: str, chunks: list = None) -> str | None:
     """
     Analyze user intent — returns a 1-sentence Vietnamese description of the
     user's problem for internal use (injected into generator prompt).
+
+    If chunks are provided, uses them as context for grounded intent analysis.
+    If not, falls back to blind analysis (no context).
     Returns None if vLLM is unavailable.
     """
-    print(f"[INTENT] Analyzing: \"{query}\"")
+    if chunks:
+        print(f"[INTENT] Contextual analysis with {len(chunks)} chunks: \"{query}\"")
+        # Build context from chunks
+        chunk_texts = []
+        for i, c in enumerate(chunks, 1):
+            subject = c.metadata.get("subject", "")
+            text = c.text or c.metadata.get("description", "")
+            chunk_texts.append(f"{i}. {subject}: {text}")
+        context_block = "\n".join(chunk_texts)
+
+        user_content = f"Tài liệu tham khảo:\n{context_block}\n\nCâu hỏi: {query}"
+        system_prompt = CONTEXTUAL_INTENT_PROMPT
+    else:
+        print(f"[INTENT] Blind analysis (no chunks): \"{query}\"")
+        user_content = query
+        system_prompt = INTENT_PROMPT
 
     try:
         response = _client.chat.completions.create(
             model=VLLM_MODEL,
             messages=[
-                {"role": "system", "content": INTENT_PROMPT},
-                {"role": "user", "content": query},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
             ],
             max_tokens=100,
             temperature=0.1,
