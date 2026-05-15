@@ -24,6 +24,7 @@ Dependencies: qdrant-client, sentence-transformers, openai
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -55,7 +56,8 @@ DEVICE = "cpu"
 GENERATION_SYSTEM_PROMPT = (
     "Bạn là bác sĩ Việt Nam đang dùng phần mềm EHC. "
     "Hãy viết 3-5 câu hỏi ngắn, colloquial (như nhắn tin cho đồng nghiệp) về vấn đề sau. "
-    "Mỗi câu một dòng, không đánh số."
+    "Mỗi câu một dòng, không đánh số.\n"
+    "QUAN TRỌNG: Chỉ viết bằng tiếng Việt. Tuyệt đối không dùng tiếng Trung, tiếng Anh hay ngôn ngữ khác."
 )
 
 
@@ -100,38 +102,56 @@ def fetch_all_faqs() -> list[dict]:
     return faqs
 
 
+def _contains_chinese(text: str) -> bool:
+    """Check if text contains Chinese characters (U+4E00–U+9FFF)."""
+    return bool(re.search(r'[一-鿿]', text))
+
+
 def generate_questions_for_faq(client: OpenAI, faq: dict) -> list[str]:
-    """Call vLLM to generate colloquial questions for a FAQ topic."""
+    """Call vLLM to generate colloquial questions for a FAQ topic. Retries up to 3 times."""
     subject = faq["subject"]
     description = faq["description"]
 
     user_prompt = f"Chủ đề: {subject}\nMô tả: {description}"
 
-    try:
-        response = client.chat.completions.create(
-            model=VLLM_MODEL,
-            messages=[
-                {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            max_tokens=256,
-            temperature=0.7,
-        )
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = client.chat.completions.create(
+                model=VLLM_MODEL,
+                messages=[
+                    {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=256,
+                temperature=0.3,
+            )
 
-        text = response.choices[0].message.content.strip()
-        # Split into individual questions, filter empty lines
-        questions = [q.strip() for q in text.split("\n") if q.strip()]
-        # Remove any numbering artifacts (e.g., "1. ", "- ")
-        cleaned = []
-        for q in questions:
-            q = q.lstrip("0123456789.-) ").strip()
-            if q and len(q) > 5:
-                cleaned.append(q)
-        return cleaned[:5]  # cap at 5
+            text = response.choices[0].message.content.strip()
+            # Split into individual questions, filter empty lines
+            questions = [q.strip() for q in text.split("\n") if q.strip()]
+            # Remove any numbering artifacts (e.g., "1. ", "- ")
+            cleaned = []
+            for q in questions:
+                q = q.lstrip("0123456789.-) ").strip()
+                if q and len(q) > 5:
+                    cleaned.append(q)
 
-    except Exception as e:
-        print(f"  [WARN] Generation failed for '{subject}': {type(e).__name__}: {e}")
-        return []
+            # Filter out questions containing Chinese characters
+            filtered = [q for q in cleaned if not _contains_chinese(q)]
+            removed_count = len(cleaned) - len(filtered)
+            if removed_count > 0:
+                print(f"  [WARN] Filtered {removed_count} question(s) with Chinese characters for '{subject}'")
+
+            return filtered[:5]  # cap at 5
+
+        except Exception as e:
+            if attempt < max_retries:
+                print(f"  [RETRY {attempt}/{max_retries}] {subject}")
+                time.sleep(2)
+            else:
+                print(f"  [WARN] Generation failed after {max_retries} retries for '{subject}': {type(e).__name__}: {e}")
+                return []
 
 
 def generate_training_data():
@@ -181,7 +201,7 @@ def generate_training_data():
                 print(f"    → SKIPPED (no questions generated)")
 
             # Small delay to avoid overwhelming vLLM
-            time.sleep(0.2)
+            time.sleep(0.5)
 
     print(f"\n[GENERATE] Done. {total_pairs} training pairs saved to {PAIRS_FILE}")
     return total_pairs
