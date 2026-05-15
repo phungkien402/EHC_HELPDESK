@@ -147,5 +147,40 @@
     "question": "huh??",
     "type": "ambiguous",
     "expected_behavior": "ask_clarification"
+  },
+  {
+    "id": "q_new_01",
+    "question": "muốn hủy nhập viện thì bấm vào đâu",
+    "type": "colloquial",
+    "expected_keywords": ["hủy", "nhập viện"],
+    "expected_faq_subject": "Muốn hủy nhập viện thì bấn vào đâu"
+  },
+  {
+    "id": "q_new_02",
+    "question": "sao thuốc kê xong không thấy trong đơn",
+    "type": "colloquial",
+    "expected_keywords": ["thuốc", "tổng hợp"],
+    "expected_faq_subject": "Tại sao đã kê thuốc rồi mà khi tổng hợp không thấy"
+  },
+  {
+    "id": "q_new_03",
+    "question": "bệnh nhân thanh toán rồi mà vẫn còn nợ",
+    "type": "colloquial",
+    "expected_keywords": ["thanh toán"],
+    "expected_faq_subject": "Lỗi thanh toán QR động thường do những nguyên nhân nảo?"
+  },
+  {
+    "id": "q_new_04",
+    "question": "in toa thuốc bị trắng trang",
+    "type": "colloquial",
+    "expected_keywords": ["in", "trắng"],
+    "expected_faq_subject": "Tại sao khi ấn in vỏ bệnh án mà trắng xóa không thấy có nội dung nào hiện lên"
+  },
+  {
+    "id": "q_new_05",
+    "question": "chuyển khoa cho bệnh nhân làm sao",
+    "type": "colloquial",
+    "expected_keywords": ["chuyển", "bệnh nhân"],
+    "expected_faq_subject": "Muốn chuyển phòng khám cho bệnh nhân?"
   }
 ]
