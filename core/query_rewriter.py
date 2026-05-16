@@ -17,6 +17,7 @@ from openai import OpenAI, APIConnectionError
 
 from config import VLLM_BASE_URL, VLLM_MODEL
 from core.generator import LLMUnavailableError
+from core.abbreviations import expand_abbreviations
 
 # Module-level client — created once when module is first imported
 _client = OpenAI(base_url=f"{VLLM_BASE_URL}/v1", api_key="not-needed")
@@ -149,6 +150,7 @@ def rewrite(text: str) -> str:
     Returns the rewritten query string.
     If vLLM is unavailable, returns the original text as-is.
     """
+    text = expand_abbreviations(text)
     print(f"[REWRITER] Original : \"{text}\"")
 
     try:
@@ -223,6 +225,7 @@ def analyze_and_rewrite(query: str, chunks: list = None) -> tuple[str | None, st
     If chunks are provided, injects them as context for grounded analysis.
     Graceful degradation: returns (None, original_query) if vLLM is unavailable.
     """
+    query = expand_abbreviations(query)
     print(f"[ANALYZE+REWRITE] Query: \"{query}\"")
 
     # Build user content with optional chunk context
