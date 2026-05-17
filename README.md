@@ -8,13 +8,19 @@ On-premise RAG chatbot for doctors using the EHC electronic medical record softw
 User Question
      |
      v
-[Query Rewriter] --> [Retriever] --> [Reranker] --> [Confidence Check]
-    (vLLM)          (bge-m3 +       (bge-reranker        |
-                     Qdrant)          -v2-m3)       -----+-----
-                                                    |         |
-                                                    v         v
-                                              [Generator] [Fallback]
-                                                (vLLM)    Handler
+[Intent Guard] ──── off-topic? ──→ [Chat Fallback]
+     |                                (polite redirect)
+     | EHC-related
+     v
+[Fast Retrieve] ──→ [Analyze + Rewrite] ──→ [Full Retrieve] ──→ [Rerank]
+  (top 3, context)     (vLLM: intent +        (bge-m3 +          (bge-reranker
+                        formal query)           Qdrant)            -v2-m3)
+                                                                      |
+                                                               ------+------
+                                                               |           |
+                                                               v           v
+                                                         [Generator]  [Fallback]
+                                                           (vLLM)     Handler
 ```
 
 ## Tech Stack
@@ -26,6 +32,7 @@ User Question
 | Reranker | BAAI/bge-reranker-v2-m3 |
 | Vector DB | Qdrant |
 | API | FastAPI + Uvicorn |
+| Chat platform | Slack |
 | Data source | Redmine FAQ project (464 entries) |
 | GPU | 2x Tesla V100 16GB (for vLLM) |
 | CPU | bge-m3 + reranker (frees GPU VRAM) |
@@ -33,8 +40,9 @@ User Question
 ## Project Structure
 
 ```
-ehc-helpdesk/
+EHC_HELPDESK/
 ├── core/               # RAG pipeline modules
+│   ├── intent_guard.py #   LLM classifier + chat fallback
 │   ├── query_rewriter.py
 │   ├── retriever.py
 │   ├── reranker.py
@@ -47,13 +55,15 @@ ehc-helpdesk/
 │   ├── embedder.py
 │   └── reindex.py
 ├── adapters/           # Platform adapters
-│   ├── telegram_adapter.py
-│   ├── zalo_adapter.py
+│   ├── slack_adapter.py
 │   └── web_adapter.py
 ├── api/                # FastAPI gateway
 │   ├── routes.py
 │   ├── session.py
 │   └── logger.py
+├── scripts/            # Operational scripts
+│   ├── monitor.sh
+│   └── backup_qdrant.sh
 ├── ui/                 # Web interface
 │   └── index.html
 ├── tests/              # Evaluation
@@ -63,8 +73,6 @@ ehc-helpdesk/
 ├── deploy/             # systemd service files
 │   ├── ehc-vllm.service
 │   └── ehc-helpdesk.service
-├── docs/
-│   └── PROGRESS.md
 ├── config.py
 ├── .env.example
 └── requirements.txt
@@ -75,7 +83,7 @@ ehc-helpdesk/
 ### Prerequisites
 
 - Ubuntu server with 2x NVIDIA V100 (or equivalent, 32GB+ VRAM total)
-- Python 3.10+
+- Python 3.12+
 - Docker (for Qdrant)
 - Redmine instance with FAQ project
 
@@ -83,7 +91,7 @@ ehc-helpdesk/
 
 ```bash
 git clone https://github.com/phungkien402/EHC_HELPDESK.git
-cd EHC_HELPDESK/ehc-helpdesk
+cd EHC_HELPDESK
 pip install -r requirements.txt
 ```
 
@@ -91,7 +99,7 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Edit .env with your Redmine URL, API key, etc.
+# Edit .env with your Redmine URL, API key, Slack tokens, etc.
 ```
 
 ### 3. Start infrastructure
@@ -100,12 +108,8 @@ cp .env.example .env
 # Qdrant
 docker run -d -p 6333:6333 qdrant/qdrant
 
-# vLLM (uses both GPUs)
-python -m vllm.entrypoints.openai.api_server \
-    --model Qwen/Qwen2.5-7B-Instruct \
-    --tensor-parallel-size 2 \
-    --dtype half \
-    --gpu-memory-utilization 0.90
+# vLLM (shared service — port 8000, used by this project and others)
+sudo systemctl start ehc-vllm
 ```
 
 ### 4. Ingest and embed FAQ data
@@ -124,6 +128,17 @@ uvicorn api.routes:app --host 0.0.0.0 --port 8080
 ### 6. Open the web UI
 
 Navigate to `http://your-server:8080` in a browser.
+
+## Shared vLLM Service
+
+The vLLM inference server runs as a standalone systemd service (`ehc-vllm.service`) on port 8000. It is shared across multiple projects on the same server — not exclusive to this helpdesk. Any service needing LLM inference connects to `http://localhost:8000/v1`.
+
+```bash
+# Manage the shared vLLM service
+sudo systemctl start ehc-vllm
+sudo systemctl status ehc-vllm
+journalctl -u ehc-vllm -f
+```
 
 ## Production Deployment (systemd)
 
@@ -153,10 +168,10 @@ journalctl -u ehc-helpdesk -f
 | GET | `/` | Web Chat UI |
 | GET | `/health` | Health check |
 | POST | `/webhook/web` | Web chat (`{"user_id": "...", "text": "..."}`) |
-| POST | `/webhook/telegram` | Telegram webhook |
-| POST | `/webhook/zalo` | Zalo OA webhook |
+| POST | `/webhook/slack` | Slack events webhook |
 | GET | `/admin/logs` | Query logs (optional `?fallback_only=true`) |
 | POST | `/admin/reindex` | Trigger FAQ reindex |
+| POST | `/admin/maintenance` | Toggle maintenance mode |
 
 ## Evaluation
 
@@ -180,19 +195,21 @@ python -m tests.debug_query "in bang ke kham benh o dau"
 
 ## Key Design Decisions
 
-- **No LangChain/LlamaIndex** - plain Python for full control and easy debugging
-- **CPU for embedding/reranker** - frees all GPU VRAM for vLLM inference
-- **Cross-encoder reranker** - dramatically improves retrieval quality (vector 0.73 -> reranker 0.99)
-- **Module-level singletons** - models loaded once at import, not per-request
-- **Strict grounding prompt** - LLM answers only from retrieved context, no hallucination
-- **Graceful degradation** - pipeline works without vLLM (returns retrieved chunks directly)
+- **No LangChain/LlamaIndex** — plain Python for full control and easy debugging
+- **Iterative retrieval** — fast retrieve first to give LLM domain context, then rewrite + full retrieve
+- **Intent Guard** — LLM classifier filters off-topic queries before hitting the RAG pipeline
+- **CPU for embedding/reranker** — frees all GPU VRAM for vLLM inference
+- **Cross-encoder reranker** — dramatically improves retrieval quality (vector 0.73 → reranker 0.99)
+- **Module-level singletons** — models loaded once at import, not per-request
+- **Strict grounding prompt** — LLM answers only from retrieved context, no hallucination
+- **Graceful degradation** — pipeline works without vLLM (returns retrieved chunks directly)
 
 ## Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| REDMINE_URL | Yes | - | Redmine base URL |
-| REDMINE_API_KEY | Yes | - | Redmine API key |
+| REDMINE_URL | Yes | — | Redmine base URL |
+| REDMINE_API_KEY | Yes | — | Redmine API key |
 | REDMINE_PROJECT | No | ehcfaq | Redmine project identifier |
 | VLLM_BASE_URL | No | http://localhost:8000 | vLLM server URL |
 | VLLM_MODEL | No | Qwen/Qwen2.5-7B-Instruct | Model name |
@@ -203,10 +220,13 @@ python -m tests.debug_query "in bang ke kham benh o dau"
 | RETRIEVER_TOP_K | No | 10 | Chunks to retrieve |
 | RERANKER_TOP_N | No | 3 | Chunks after reranking |
 | CONFIDENCE_THRESHOLD | No | 0.4 | Min reranker score |
-| TELEGRAM_BOT_TOKEN | No | - | Telegram bot token |
-| ZALO_OA_SECRET | No | - | Zalo OA app secret |
-| ZALO_ACCESS_TOKEN | No | - | Zalo OA access token |
+| SESSION_MAX_TURNS | No | 10 | Max conversation turns |
+| SLACK_BOT_TOKEN | Yes | — | Slack bot OAuth token |
+| SLACK_SIGNING_SECRET | Yes | — | Slack request signing secret |
+| SLACK_ADMIN_USERS | No | — | Comma-separated Slack user IDs for admin |
+| ADMIN_TOKEN | No | — | Token for admin API endpoints |
+| MAINTENANCE_MODE | No | false | Start in maintenance mode |
 
 ## License
 
-Internal use only - EHC Healthcare.
+Internal use only — EHC Healthcare.

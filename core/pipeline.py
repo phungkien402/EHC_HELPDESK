@@ -25,6 +25,7 @@ from core.models import Message, Answer
 from core import query_rewriter, retriever, reranker, generator, confidence, fallback
 from core.query_rewriter import analyze_and_rewrite
 from core.generator import GeneratorError, LLMUnavailableError
+from core.intent_guard import classify, chat_fallback
 
 # --- Maintenance mode (toggled at runtime via /admin/maintenance) ---
 _maintenance_mode: bool = MAINTENANCE_MODE
@@ -72,6 +73,18 @@ def run(message: Message, session_history: list) -> Answer:
     print(f"\n{'='*60}")
     print(f"[PIPELINE] Input: \"{message.text}\"")
     print(f"{'='*60}")
+
+    # Guard: off-topic / small talk (LLM classifier)
+    if classify(message.text):
+        print(f"[PIPELINE] Off-topic detected: \"{message.text}\" → chat fallback")
+        fallback_text = chat_fallback(message.text)
+        return Answer(
+            text=fallback_text,
+            confidence=1.0,
+            source_chunks=[],
+            is_fallback=False,
+            rewritten_question=message.text,
+        )
 
     # Step 1: Fast retrieve — embed original query, get top 3 (no reranking)
     print(f"\n[PIPELINE] Step 1: Fast retrieve (top 3)")
