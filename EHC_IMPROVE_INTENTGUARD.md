@@ -1,3 +1,92 @@
+# IMPROVE: Upgrade IntentGuard — terminology injection + dangerous pattern blocking
+
+_Generated: 2026-05-23 | Project: EHC_HELPDESK_
+
+## Context
+
+Current `core/intent_guard.py` uses a generic CLASSIFY_PROMPT with no domain knowledge.
+This causes misclassification of EHC-specific terms (bệnh án, BHYT, xử trí...).
+Also missing: dangerous pattern blocking before LLM call.
+
+## Project path
+
+```
+/home/phungkien/EHC_HELPDESK/
+```
+
+Shell pattern for all commands:
+```bash
+/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK/ && <command>"
+```
+
+---
+
+## Change 1 — Create `data/terminology.json`
+
+Create file `/home/phungkien/EHC_HELPDESK/data/terminology.json`:
+
+```json
+{
+  "clinical": {
+    "label": "Lâm sàng / nghiệp vụ y tế",
+    "terms": [
+      "chỉ định", "y lệnh", "bệnh án", "xử trí", "chẩn đoán", "điều trị",
+      "kê đơn", "toa thuốc", "phác đồ", "hội chẩn", "phẫu thuật", "thủ thuật",
+      "xét nghiệm", "siêu âm", "X-quang", "nội soi", "bệnh phẩm",
+      "vào viện", "ra viện", "xuất viện", "chuyển khoa", "chuyển viện",
+      "nhập viện", "đón tiếp", "tiếp nhận", "đăng ký khám", "khám bệnh",
+      "bệnh nhân", "người bệnh", "người giám hộ", "thân nhân",
+      "viện phí", "BHYT", "bảo hiểm y tế", "thanh toán", "thu ngân",
+      "dược", "thuốc", "kho thuốc", "cấp phát thuốc", "lĩnh thuốc",
+      "điều dưỡng", "bác sĩ", "dược sĩ", "kỹ thuật viên"
+    ]
+  },
+  "his_modules": {
+    "label": "Phân hệ / module HIS",
+    "terms": [
+      "module", "phân hệ", "màn hình", "form", "giao diện",
+      "nội trú", "ngoại trú", "cấp cứu", "phòng khám",
+      "CĐHA", "PACS", "MiniPACS", "RIS", "LIS",
+      "khoa dược", "kho", "nhà thuốc",
+      "hành chính", "danh mục", "cấu hình", "hệ thống",
+      "báo cáo", "thống kê", "in ấn", "bảng kê",
+      "viện phí", "bảo hiểm", "BHYT", "giảm trừ",
+      "phẫu thuật", "gây mê", "hồi sức",
+      "tài liệu tuỳ biến", "vỏ bệnh án", "phiếu chỉ định",
+      "giấy ra viện", "phiếu khám", "bảng kê 6556"
+    ]
+  },
+  "actions": {
+    "label": "Thao tác người dùng",
+    "terms": [
+      "lưu", "xác nhận", "duyệt", "hủy", "xóa", "sửa", "thêm",
+      "tìm kiếm", "tra cứu", "tìm", "lọc",
+      "in", "xuất", "export", "import",
+      "đăng nhập", "đăng xuất", "mở", "đóng", "chuyển",
+      "cập nhật", "đồng bộ", "kết nối", "tải lại"
+    ]
+  },
+  "error_descriptions": {
+    "label": "Mô tả lỗi thông tục",
+    "terms": [
+      "xoay", "quay", "loading", "chờ mãi", "treo", "đứng",
+      "mất", "biến mất", "không thấy", "không hiện", "không ra",
+      "không được", "không lưu", "không in", "không tìm",
+      "lỗi", "báo lỗi", "thông báo đỏ", "crash", "văng",
+      "chậm", "lag", "đơ", "tắt đột ngột",
+      "không vào được", "không mở được", "bị khóa", "không truy cập"
+    ]
+  }
+}
+```
+
+---
+
+## Change 2 — Rewrite `core/intent_guard.py`
+
+Replace the entire file content with:
+
+```python
 """
 Intent guard:
 1. Pre-filter: block dangerous/destructive commands without calling LLM
@@ -155,3 +244,37 @@ def chat_fallback(query: str) -> str:
     except Exception as e:
         print(f"[INTENT_GUARD] Chat fallback failed: {e}")
         return _FALLBACK_RESPONSE
+```
+
+---
+
+## Verify
+
+```bash
+/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK && python3 -m py_compile core/intent_guard.py && echo OK"
+```
+
+```bash
+/bin/bash /home/phungkien/EHC_HELPDESK/run.sh -c "
+from core.intent_guard import classify
+tests = [
+    ('xin chào', True),
+    ('tạo tài liệu tùy biến như nào', False),
+    ('bị lỗi rồi', False),
+    ('delete database server', True),
+    ('in bảng kê BHYT', False),
+]
+for q, expect_offtopic in tests:
+    result = classify(q)
+    status = 'OK' if result == expect_offtopic else 'FAIL'
+    print(f'[{status}] \"{q}\" → offtopic={result}')
+"
+```
+
+---
+
+## Git
+
+```bash
+/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK && git checkout -b improve/intentguard && git add core/intent_guard.py data/terminology.json && git commit -m 'improve: upgrade IntentGuard with terminology injection and dangerous pattern blocking' && git push origin improve/intentguard"
+```
