@@ -189,19 +189,29 @@ def rewrite(text: str) -> str:
 
 
 ANALYZE_AND_REWRITE_PROMPT = (
-    "Bạn là trợ lý EHC. Dựa vào tài liệu tham khảo (nếu có), hãy thực hiện 2 việc:\n"
+    "Bạn là trợ lý EHC. Dựa vào tài liệu tham khảo (nếu có), hãy thực hiện 3 việc:\n"
     "1. Mô tả ngắn gọn vấn đề người dùng đang gặp (1 câu, ngôi thứ 3)\n"
     "2. Viết lại câu hỏi thành query tìm kiếm ngắn gọn, formal tiếng Việt\n"
-    "Trả về đúng 2 dòng theo format:\n"
+    "3. Đánh giá xem câu hỏi có đủ thông tin để trả lời không\n"
+    "Trả về đúng 3 dòng theo format:\n"
     "INTENT: <mô tả vấn đề>\n"
-    "QUERY: <query tìm kiếm>"
+    "QUERY: <query tìm kiếm>\n"
+    "ANSWERABLE: <yes | no | unclear>\n\n"
+    "Hướng dẫn cho ANSWERABLE:\n"
+    "- yes: câu hỏi đủ thông tin, có thể tìm kiếm và trả lời\n"
+    "- unclear: câu hỏi quá mơ hồ — không đề cập module nào, lỗi gì, thao tác nào, "
+    "hoặc loại tài liệu nào. Ví dụ: 'mình không in được', 'bị lỗi rồi', 'không vào được'\n"
+    "- no: hoàn toàn không liên quan hoặc không có tài liệu tham khảo\n\n"
+    "Nếu lịch sử hội thoại đã làm rõ vấn đề → ANSWERABLE=yes dù câu hỏi hiện tại ngắn.\n"
+    "Nếu không có tài liệu tham khảo nhưng câu hỏi rõ ràng → ANSWERABLE=yes."
 )
 
 
-def _parse_intent_and_query(response_text: str, original_query: str) -> tuple[str | None, str]:
-    """Parse the INTENT:/QUERY: response format. Returns (intent, rewritten_query)."""
+def _parse_analyze_response(response_text: str, original_query: str) -> tuple[str | None, str, str]:
+    """Parse INTENT/QUERY/ANSWERABLE response. Returns (intent, rewritten_query, answerable)."""
     intent = None
     rewritten = original_query
+    answerable = "unclear"  # safe default
 
     for line in response_text.strip().splitlines():
         line = line.strip()
@@ -209,24 +219,41 @@ def _parse_intent_and_query(response_text: str, original_query: str) -> tuple[st
             intent = line[len("INTENT:"):].strip()
         elif line.upper().startswith("QUERY:"):
             rewritten = line[len("QUERY:"):].strip()
+        elif line.upper().startswith("ANSWERABLE:"):
+            val = line[len("ANSWERABLE:"):].strip().lower()
+            if val in ("yes", "no", "unclear"):
+                answerable = val
 
-    # If rewritten is empty after parsing, fall back to original
     if not rewritten:
         rewritten = original_query
 
-    return intent, rewritten
+    return intent, rewritten, answerable
 
 
-def analyze_and_rewrite(query: str, chunks: list = None) -> tuple[str | None, str]:
+def analyze_and_rewrite(query: str, chunks: list = None, session_history: list = None) -> tuple[str | None, str, str]:
     """
-    Combined intent analysis + query rewrite in a single vLLM call.
-    Returns (intent, rewritten_query).
+    Combined intent analysis + query rewrite + answerability check in a single vLLM call.
+    Returns (intent, rewritten_query, answerable).
 
+    answerable is one of: "yes", "no", "unclear"
     If chunks are provided, injects them as context for grounded analysis.
-    Graceful degradation: returns (None, original_query) if vLLM is unavailable.
+    If session_history is provided, injects recent turns so LLM can resolve
+    short follow-up replies (e.g. "2", "cái đó", "vậy thì...") in context.
+    Graceful degradation: returns (None, original_query, "unclear") if vLLM is unavailable.
     """
     query = expand_abbreviations(query)
     print(f"[ANALYZE+REWRITE] Query: \"{query}\"")
+
+    # Build history block from recent conversation turns (last 2 exchanges = 4 messages)
+    history_block = ""
+    if session_history:
+        recent = session_history[-4:]
+        lines = []
+        for turn in recent:
+            role = "Người dùng" if turn["role"] == "user" else "Trợ lý"
+            lines.append(f"{role}: {turn['text']}")
+        history_block = "Lịch sử hội thoại:\n" + "\n".join(lines) + "\n\n"
+        print(f"[ANALYZE+REWRITE] Injecting {len(recent)} history turns")
 
     # Build user content with optional chunk context
     if chunks:
@@ -237,10 +264,10 @@ def analyze_and_rewrite(query: str, chunks: list = None) -> tuple[str | None, st
             text = c.text or c.metadata.get("description", "")
             chunk_texts.append(f"{i}. {subject}: {text}")
         context_block = "\n".join(chunk_texts)
-        user_content = f"Tài liệu tham khảo:\n{context_block}\n\nCâu hỏi: {query}"
+        user_content = f"{history_block}Tài liệu tham khảo:\n{context_block}\n\nCâu hỏi: {query}"
     else:
         print(f"[ANALYZE+REWRITE] No chunks (blind mode)")
-        user_content = f"Câu hỏi: {query}"
+        user_content = f"{history_block}Câu hỏi: {query}"
 
     messages = [
         {"role": "system", "content": ANALYZE_AND_REWRITE_PROMPT},
@@ -256,13 +283,13 @@ def analyze_and_rewrite(query: str, chunks: list = None) -> tuple[str | None, st
         )
 
         raw = response.choices[0].message.content.strip()
-        intent, rewritten = _parse_intent_and_query(raw, query)
+        intent, rewritten, answerable = _parse_analyze_response(raw, query)
         print(f"[ANALYZE+REWRITE] Intent: \"{intent}\"")
         print(f"[ANALYZE+REWRITE] Rewritten: \"{rewritten}\"")
-        return intent, rewritten
+        print(f"[ANALYZE+REWRITE] Answerable: \"{answerable}\"")
+        return intent, rewritten, answerable
 
     except APIConnectionError:
-        # Retry once after 1s — vLLM may be busy
         print(f"[ANALYZE+REWRITE] Connection error, retrying in 1s...")
         time.sleep(1)
         try:
@@ -273,10 +300,11 @@ def analyze_and_rewrite(query: str, chunks: list = None) -> tuple[str | None, st
                 temperature=0.1,
             )
             raw = response.choices[0].message.content.strip()
-            intent, rewritten = _parse_intent_and_query(raw, query)
+            intent, rewritten, answerable = _parse_analyze_response(raw, query)
             print(f"[ANALYZE+REWRITE] Intent (retry): \"{intent}\"")
             print(f"[ANALYZE+REWRITE] Rewritten (retry): \"{rewritten}\"")
-            return intent, rewritten
+            print(f"[ANALYZE+REWRITE] Answerable (retry): \"{answerable}\"")
+            return intent, rewritten, answerable
         except Exception as retry_e:
             print(f"[ANALYZE+REWRITE] Retry failed ({type(retry_e).__name__}), raising LLMUnavailableError")
             raise LLMUnavailableError(str(retry_e)) from retry_e

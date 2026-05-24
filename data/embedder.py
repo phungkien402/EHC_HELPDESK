@@ -19,14 +19,7 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 
 from config import QDRANT_URL, QDRANT_COLLECTION, EMBED_MODEL
 from data.ingestor import Document
-
-
-def build_chunk_text(doc: Document) -> str:
-    """
-    Combine subject + description into the text to embed.
-    Subject carries most semantic meaning since descriptions are very short.
-    """
-    return f"Câu hỏi: {doc.subject}\nHướng dẫn: {doc.description}"
+from data.preprocessor import build_embedding_text, build_raw_text
 
 
 def embed_and_store(docs: list[Document], recreate: bool = False) -> int:
@@ -42,18 +35,25 @@ def embed_and_store(docs: list[Document], recreate: bool = False) -> int:
         print("[EMBEDDER] No documents to embed.")
         return 0
 
-    # Build chunk texts
-    chunk_texts = [build_chunk_text(doc) for doc in docs]
-    print(f"[EMBEDDER] Built {len(chunk_texts)} chunk texts")
-    print(f"[EMBEDDER] Example chunk:\n  {chunk_texts[0][:120]}...")
+    # Build two versions: embedding_text for vector, raw_text for display
+    embedding_texts = [
+        build_embedding_text(doc.subject, doc.description)
+        for doc in docs
+    ]
+    raw_texts = [
+        build_raw_text(doc.subject, doc.description)
+        for doc in docs
+    ]
+    print(f"[EMBEDDER] Built {len(embedding_texts)} embedding texts")
+    print(f"[EMBEDDER] Example embedding_text:\n  {embedding_texts[0][:150]}...")
 
     # Load embedding model
     print(f"[EMBEDDER] Loading model: {EMBED_MODEL}")
     model = SentenceTransformer(EMBED_MODEL, device='cpu')
 
-    # Generate embeddings in batches
-    print(f"[EMBEDDER] Encoding {len(chunk_texts)} texts (batch_size=32)...")
-    embeddings = model.encode(chunk_texts, batch_size=32, show_progress_bar=True)
+    # Generate embeddings in batches (using enriched embedding_texts)
+    print(f"[EMBEDDER] Encoding {len(embedding_texts)} texts (batch_size=32)...")
+    embeddings = model.encode(embedding_texts, batch_size=32, show_progress_bar=True)
     print(f"[EMBEDDER] Embeddings shape: {embeddings.shape}")
 
     # Connect to Qdrant
@@ -85,7 +85,8 @@ def embed_and_store(docs: list[Document], recreate: bool = False) -> int:
     for i in range(0, len(docs), batch_size):
         batch_docs = docs[i:i + batch_size]
         batch_embeddings = embeddings[i:i + batch_size]
-        batch_texts = chunk_texts[i:i + batch_size]
+        batch_raw = raw_texts[i:i + batch_size]
+        batch_emb_texts = embedding_texts[i:i + batch_size]
 
         points = [
             PointStruct(
@@ -97,10 +98,12 @@ def embed_and_store(docs: list[Document], recreate: bool = False) -> int:
                     "description": doc.description,
                     "project": doc.project,
                     "url": doc.url,
-                    "chunk_text": chunk_text,
+                    "chunk_text": raw_text,
+                    "embedding_text": embedding_text,
                 },
             )
-            for doc, embedding, chunk_text in zip(batch_docs, batch_embeddings, batch_texts)
+            for doc, embedding, raw_text, embedding_text
+            in zip(batch_docs, batch_embeddings, batch_raw, batch_emb_texts)
         ]
 
         client.upsert(collection_name=QDRANT_COLLECTION, points=points)

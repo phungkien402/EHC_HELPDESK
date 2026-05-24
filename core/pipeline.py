@@ -48,6 +48,42 @@ def is_maintenance_mode() -> bool:
     return _maintenance_mode
 
 
+def _build_clarify_message(query: str, intent: str | None) -> str:
+    """
+    Build a clarify message asking for more details.
+    Uses a simple LLM call to generate a natural follow-up question.
+    Falls back to a generic message if vLLM is unavailable.
+    """
+    from config import VLLM_BASE_URL, VLLM_MODEL
+    from openai import OpenAI, APIConnectionError as _APIConnectionError
+
+    _CLARIFY_PROMPT = (
+        "Bạn là trợ lý hỗ trợ phần mềm EHC. Người dùng gửi tin nhắn mơ hồ.\n"
+        "Hãy hỏi ngắn gọn (tối đa 2 câu) để làm rõ vấn đề.\n"
+        "Chỉ hỏi dựa trên những gì user đã nói — KHÔNG giả định module cụ thể.\n"
+        "Hỏi cụ thể: lỗi gì? module nào? thao tác nào? thấy thông báo gì?"
+    )
+    _DEFAULT = "Bạn đang gặp vấn đề cụ thể nào? Thấy thông báo lỗi gì không?"
+
+    try:
+        _c = OpenAI(base_url=f"{VLLM_BASE_URL}/v1", api_key="not-needed")
+        resp = _c.chat.completions.create(
+            model=VLLM_MODEL,
+            messages=[
+                {"role": "system", "content": _CLARIFY_PROMPT},
+                {"role": "user", "content": query},
+            ],
+            max_tokens=100,
+            temperature=0.3,
+        )
+        msg = resp.choices[0].message.content
+        if msg:
+            return msg.strip()
+    except Exception:
+        pass
+    return _DEFAULT
+
+
 def run(message: Message, session_history: list) -> Answer:
     """
     Execute the full RAG pipeline on a message.
@@ -90,13 +126,17 @@ def run(message: Message, session_history: list) -> Answer:
     print(f"\n[PIPELINE] Step 1: Fast retrieve (top 3)")
     fast_chunks = retriever.retrieve(message.text, top_k=3)
 
-    # Step 2: Analyze intent + rewrite query in a single LLM call
+    # Step 2: Analyze intent + rewrite query + answerability check in a single LLM call
     print(f"\n[PIPELINE] Step 2: Analyze + Rewrite (single call)")
     try:
         if fast_chunks:
-            user_intent, rewritten = analyze_and_rewrite(message.text, chunks=fast_chunks)
+            user_intent, rewritten, answerable = analyze_and_rewrite(
+                message.text, chunks=fast_chunks, session_history=session_history
+            )
         else:
-            user_intent, rewritten = analyze_and_rewrite(message.text)
+            user_intent, rewritten, answerable = analyze_and_rewrite(
+                message.text, session_history=session_history
+            )
     except LLMUnavailableError:
         print("[PIPELINE] vLLM unavailable during analyze+rewrite → LLM unavailable response")
         return Answer(
@@ -107,6 +147,18 @@ def run(message: Message, session_history: list) -> Answer:
             rewritten_question="",
         )
     print(f"[PIPELINE] analyze_and_rewrite: intent=\"{user_intent}\" query=\"{rewritten}\"")
+
+    # Step 2.5: Clarify if query is too vague
+    if answerable == "unclear":
+        print(f"[PIPELINE] Query too vague (answerable=unclear) → clarify")
+        clarify_text = _build_clarify_message(message.text, user_intent)
+        return Answer(
+            text=clarify_text,
+            confidence=0.0,
+            source_chunks=[],
+            is_fallback=True,
+            rewritten_question=rewritten,
+        )
 
     # Step 3: Full retrieve with rewritten query
     print(f"\n[PIPELINE] Step 3: Full retrieve (top {RETRIEVER_TOP_K})")
