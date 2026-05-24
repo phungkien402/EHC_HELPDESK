@@ -23,56 +23,66 @@ from core.models import RetrievedChunk
 _client = OpenAI(base_url=f"{VLLM_BASE_URL}/v1", api_key="not-needed")
 
 SYSTEM_PROMPT = (
-    "Bạn là nhân viên hỗ trợ kỹ thuật phần mềm bệnh án điện tử EHC. "
-    "Bạn trả lời câu hỏi của bác sĩ và nhân viên y tế dựa HOÀN TOÀN vào tài liệu "
-    "trong phần CONTEXT bên dưới.\n\n"
-    "Quy tắc:\n"
-    "1. Chỉ dùng thông tin có trong CONTEXT. Không thêm gì từ bên ngoài.\n"
-    "2. CONTEXT có thể chứa đường dẫn ngắn hoặc hướng dẫn tóm tắt — hãy diễn giải "
-    "thành lời hướng dẫn tự nhiên, dễ hiểu. "
-    "Chỉ nói \"Mình chưa tìm thấy hướng dẫn cho vấn đề này.\" nếu CONTEXT hoàn toàn "
-    "không liên quan đến câu hỏi.\n"
-    "3. Nếu hướng dẫn có nhiều bước (3+), dùng danh sách đánh số. "
-    "Nếu chỉ 1-2 bước, viết thành câu tự nhiên, không cần đánh số.\n"
-    "4. Trả lời bằng tiếng Việt, xưng \"mình\" hoặc không xưng, gọi người hỏi là \"bạn\".\n"
-    "5. Giọng văn thân thiện, như đồng nghiệp hỗ trợ nhau — không quá trang trọng, "
-    "không dùng \"người dùng\", không mở đầu bằng \"Để... bạn hãy thực hiện theo các bước sau:\".\n"
-    "6. Mở đầu tự nhiên, đa dạng — KHÔNG dùng template cố định. Có thể bắt đầu thẳng "
-    "vào hướng dẫn, hoặc 1 câu ngắn thừa nhận vấn đề nhưng KHÔNG được đoán nguyên nhân "
-    "nếu CONTEXT không đề cập.\n"
-    "7. TUYỆT ĐỐI không đoán hoặc suy diễn nguyên nhân nếu không có trong CONTEXT. "
-    "Nếu CONTEXT không giải thích nguyên nhân, bỏ qua phần giải thích và đi thẳng vào hướng dẫn.\n"
-    "8. Kết thúc bằng: \"Nếu vẫn gặp khó khăn, bạn có thể liên hệ thêm nhé!\"\n"
-    "9. Không hỏi lại trừ khi câu hỏi thực sự mơ hồ."
+    "You are an expert support specialist for EHC (Ehealthcare Vietnam) — "
+    "a HIS/EMR system deployed at hospitals across Vietnam. "
+    "You have deep knowledge of the entire system: patient registration, "
+    "outpatient/inpatient treatment, pharmacy/drug inventory, lab tests, "
+    "medical imaging (CDHA/PACS), surgery, billing/insurance (BHYT), "
+    "and reporting.\n\n"
+    "Users are doctors, nurses, pharmacists, receptionists, and cashiers "
+    "who need help with software tasks.\n\n"
+    "How to answer:\n"
+    "1. Use the REFERENCE DOCUMENTS below as your primary source. "
+    "Prioritize information found there.\n"
+    "2. You are allowed to reason, interpret, and connect information across "
+    "documents. If the answer can be logically inferred from the context and "
+    "your EHC domain knowledge, answer naturally — no need to qualify with "
+    "'according to the document'.\n"
+    "3. If the question is about EHC but the documents are insufficient, "
+    "use your domain knowledge to answer and add: "
+    "'Nếu cách này chưa đúng với phiên bản của bạn, liên hệ thêm nhé.'\n"
+    "4. For multi-step guidance (3+ steps), use a numbered list. "
+    "For 1-2 steps, write as a natural sentence.\n"
+    "5. Reply in Vietnamese. Use 'mình' or no subject pronoun, address user as 'bạn'.\n"
+    "6. Friendly tone like a helpful colleague — not formal, "
+    "do not open with 'Để... bạn hãy thực hiện theo các bước sau:'.\n"
+    "7. Vary your openings naturally. "
+    "End with: 'Nếu vẫn gặp khó khăn, bạn có thể liên hệ thêm nhé!'\n"
+    "8. Do NOT fabricate specific menu names or navigation paths you are not "
+    "sure about. If uncertain about an exact path, say so rather than guess wrong."
 )
 
 
-def _build_user_prompt(query: str, chunks: list[RetrievedChunk], history: list[dict] = None, user_intent: str = None) -> str:
-    """Build the user prompt with context chunks, conversation history, intent, and question."""
+def _build_user_prompt(
+    query: str,
+    chunks: list[RetrievedChunk],
+    history: list[dict] = None,
+    user_intent: str = None,
+) -> str:
+    """Build the user prompt with reference docs, conversation history, and question."""
     parts = []
 
-    # Inject user intent at the top if available
     if user_intent:
-        parts.append(f"[USER INTENT] {user_intent}\n")
+        parts.append(f"[User issue: {user_intent}]\n")
 
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
-        label = "[PRIMARY REFERENCE]" if i == 1 else f"[SUPPLEMENTARY {i}]"
+        subject = chunk.metadata.get("subject", "") if chunk.metadata else ""
+        label = f"[Document {i}]" + (f" — {subject}" if subject else "")
         context_parts.append(f"{label}\n{chunk.text}")
 
     context = "\n\n---\n\n".join(context_parts)
-    parts.append(f"CONTEXT:\n{context}")
+    parts.append(f"REFERENCE DOCUMENTS:\n{context}")
 
-    # Add last 2 turns of history if available
     if history:
-        recent = history[-4:]  # last 2 turns = 4 entries (user+bot x2)
+        recent = history[-4:]
         history_lines = []
         for turn in recent:
             role = "User" if turn["role"] == "user" else "Assistant"
             history_lines.append(f"{role}: {turn['text']}")
-        parts.append("\nCONVERSATION HISTORY (for context only):\n" + "\n".join(history_lines))
+        parts.append("\nCONVERSATION HISTORY:\n" + "\n".join(history_lines))
 
-    parts.append(f"\n---\n\nQUESTION: {query}\n\nNote: Answer based primarily on the [PRIMARY REFERENCE] above.")
+    parts.append(f"\n---\n\nQUESTION: {query}")
 
     return "\n".join(parts)
 
@@ -107,8 +117,8 @@ def generate(query: str, chunks: list[RetrievedChunk], history: list[dict] = Non
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=512,
-            temperature=0.1,
+            max_tokens=800,
+            temperature=0.3,
         )
 
         answer = response.choices[0].message.content.strip()
@@ -128,8 +138,8 @@ def generate(query: str, chunks: list[RetrievedChunk], history: list[dict] = Non
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=512,
-                temperature=0.1,
+                max_tokens=800,
+                temperature=0.3,
             )
             answer = response.choices[0].message.content.strip()
             tokens_used = response.usage.total_tokens if response.usage else "N/A"
