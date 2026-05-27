@@ -61,7 +61,7 @@ Thuật ngữ và cách diễn đạt thường gặp:
 Câu hỏi liên quan (YES): thao tác nghiệp vụ bệnh viện, quy trình khám chữa bệnh, lỗi phần mềm, hướng dẫn sử dụng tính năng, quản lý bệnh nhân, thuốc, viện phí, báo cáo, cấu hình hệ thống.
 Câu hỏi KHÔNG liên quan (NO):
 - Chào hỏi xã giao thuần túy (hello, xin chào, cảm ơn, tạm biệt)
-- Hoàn toàn không liên quan đến bệnh viện hoặc phần mềm EHC
+- Hoàn toàn không liên quan đến y tế hoặc phần mềm EHC
 - Lệnh phá hoại: xoá database, drop table, format disk, rm -rf, destroy server
 - Quản trị hạ tầng không liên quan vận hành EHC: restart OS, thay đổi firewall, cài đặt OS
 Khi không chắc chắn → YES.
