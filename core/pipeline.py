@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from config import RETRIEVER_TOP_K, RERANKER_TOP_N, CONFIDENCE_THRESHOLD, MAINTENANCE_MODE, SHORTCUT_SCORE_THRESHOLD
+from config import RETRIEVER_TOP_K, RERANKER_TOP_N, CONFIDENCE_THRESHOLD, MAINTENANCE_MODE, SHORTCUT_SCORE_THRESHOLD, RETRIEVAL_OVERRIDE_THRESHOLD
 from core.models import Message, Answer
 from core import query_rewriter, retriever, reranker, generator, confidence, fallback
 from core.query_rewriter import analyze_and_rewrite
@@ -117,6 +117,16 @@ def run(message: Message, session_history: list) -> Answer:
         _f_retrieve = _pool.submit(retriever.retrieve, message.text, 3)
         _is_offtopic = _f_classify.result()
         fast_chunks = _f_retrieve.result()
+
+    # Retrieval override: if retriever found a strong domain match, trust it over guard
+    if _is_offtopic and fast_chunks:
+        top_score = fast_chunks[0].score
+        if top_score >= RETRIEVAL_OVERRIDE_THRESHOLD:
+            print(
+                f"[PIPELINE] Guard override: classify=NO but top1_rrf={top_score:.4f} "
+                f">= {RETRIEVAL_OVERRIDE_THRESHOLD} — proceeding with pipeline"
+            )
+            _is_offtopic = False
 
     if _is_offtopic:
         print(f"[PIPELINE] Off-topic detected: \"{message.text}\" → chat fallback")

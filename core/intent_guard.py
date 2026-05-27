@@ -27,6 +27,26 @@ _DANGEROUS_PATTERNS = re.compile(
     re.IGNORECASE | re.UNICODE,
 )
 
+# Business keyword prior — if query contains any of these, it is almost certainly
+# an internal HIS workflow query. Skip LLM classify entirely.
+_BUSINESS_KEYWORDS = {
+    # Patient & clinical
+    "bệnh nhân", "bn", "hồ sơ", "bệnh án",
+    # Modules / operations
+    "dịch vụ", "viện phí", "thanh toán", "bảng kê",
+    "thuốc", "toa thuốc", "kê đơn", "kho thuốc",
+    "xét nghiệm", "cls", "cận lâm sàng",
+    "cdha", "x-quang", "siêu âm", "pacs",
+    "bhyt", "bảo hiểm", "thẻ bhyt",
+    "phẫu thuật", "thủ thuật", "pttt",
+    "nội trú", "ngoại trú", "nhập viện", "ra viện",
+    "phiếu", "in phiếu", "vỏ bệnh án",
+    # Common symptom words for HIS errors
+    "sai giá", "lỗi giá", "âm kho", "không in được",
+    "không tìm thấy", "không lên", "xoay hoài",
+    "trắng xóa", "chuyển khoa", "gộp mã",
+}
+
 
 def _load_terminology() -> str:
     """Load terminology from data/terminology.json and format for prompt injection."""
@@ -50,21 +70,28 @@ _TERMINOLOGY = _load_terminology()
 
 _client = OpenAI(base_url=f"{VLLM_BASE_URL}/v1", api_key="not-needed")
 
-CLASSIFY_PROMPT = """Bạn là bộ phân loại câu hỏi hỗ trợ phần mềm quản lý bệnh viện EHC (Ehealthcare Vietnam).
-Phần mềm EHC là hệ thống HIS/EMR dùng tại các bệnh viện Việt Nam, bao gồm các phân hệ:
-Đón tiếp, Khám bệnh, Điều trị nội trú, Dược/Kho thuốc, Xét nghiệm, Chẩn đoán hình ảnh (CĐHA/PACS/MiniPACS), Phẫu thuật thủ thuật, Thanh toán/Viện phí/BHYT, Hành chính bệnh nhân, Báo cáo thống kê, Danh mục hệ thống.
-Người dùng là nhân viên bệnh viện: bác sĩ, điều dưỡng, dược sĩ, nhân viên đón tiếp, thu ngân, kỹ thuật viên xét nghiệm, nhân viên CĐHA, quản trị viên.
+CLASSIFY_PROMPT = """Bạn là bộ lọc câu hỏi cho hệ thống hỗ trợ nghiệp vụ nội bộ bệnh viện.
+Người dùng là nhân viên bệnh viện (bác sĩ, điều dưỡng, dược sĩ, nhân viên đón tiếp, thu ngân).
+Họ đang chat với bot hỗ trợ phần mềm EHC — đây là ngữ cảnh mặc định của MỌI câu hỏi.
 
-Thuật ngữ và cách diễn đạt thường gặp:
+Vì vậy, người dùng thường KHÔNG đề cập tên phần mềm hay module cụ thể.
+Họ hỏi ngắn gọn, dùng jargon nội bộ, ví dụ:
+  "sai giá", "không in được", "bị âm kho", "không tìm thấy bệnh nhân"
+
+Thuật ngữ nghiệp vụ thường gặp:
 {terminology}
 
-Câu hỏi liên quan (YES): thao tác nghiệp vụ bệnh viện, quy trình khám chữa bệnh, lỗi phần mềm, hướng dẫn sử dụng tính năng, quản lý bệnh nhân, thuốc, viện phí, báo cáo, cấu hình hệ thống.
-Câu hỏi KHÔNG liên quan (NO):
-- Chào hỏi xã giao thuần túy (hello, xin chào, cảm ơn, tạm biệt)
-- Hoàn toàn không liên quan đến y tế hoặc phần mềm EHC
-- Lệnh phá hoại: xoá database, drop table, format disk, rm -rf, destroy server
-- Quản trị hạ tầng không liên quan vận hành EHC: restart OS, thay đổi firewall, cài đặt OS
-Khi không chắc chắn → YES.
+Trả lời YES nếu câu hỏi có thể là nghiệp vụ nội bộ bệnh viện, bao gồm:
+- Thao tác phần mềm, lỗi hệ thống, hướng dẫn quy trình
+- Câu hỏi về bệnh nhân, thuốc, viện phí, xét nghiệm, BHYT, in phiếu
+- Câu ngắn, mơ hồ nhưng nghe có vẻ liên quan đến vận hành bệnh viện
+- Khi KHÔNG CHẮC → YES (ưu tiên recall)
+
+Trả lời NO chỉ khi câu hỏi RÕ RÀNG không liên quan:
+- Chào hỏi xã giao thuần túy (hello, cảm ơn, tạm biệt)
+- Chủ đề hoàn toàn ngoài y tế / phần mềm (thời tiết, giải trí, tin tức)
+- Lệnh phá hoại hạ tầng (xoá database, format disk, drop table)
+
 Trả lời CHỈ bằng một từ: YES hoặc NO.
 Câu hỏi: "{query}"
 """
@@ -82,6 +109,12 @@ def classify(query: str) -> bool:
     if _DANGEROUS_PATTERNS.search(query):
         print(f"[INTENT_GUARD] Blocked destructive pattern → OFF-TOPIC: \"{query}\"")
         return True
+
+    # Business keyword prior: skip LLM classify for obvious HIS domain queries
+    query_lower = query.lower()
+    if any(kw in query_lower for kw in _BUSINESS_KEYWORDS):
+        print(f"[INTENT_GUARD] Business keyword match → ON-TOPIC (skip LLM): \"{query}\"")
+        return False  # False = on-topic, do not treat as off-topic
 
     try:
         prompt = CLASSIFY_PROMPT.format(terminology=_TERMINOLOGY, query=expand_abbreviations(query.strip()))

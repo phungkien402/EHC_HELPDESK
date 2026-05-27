@@ -55,6 +55,10 @@ CONFIDENCE_THRESHOLD = float(_get("CONFIDENCE_THRESHOLD", "0.4"))
 # Adaptive shortcut: skip rewrite + full retrieve when fast retrieval is confident
 SHORTCUT_SCORE_THRESHOLD = float(_get("SHORTCUT_SCORE_THRESHOLD", "0.85"))
 
+# Retrieval override: if guard says NO but top1 RRF score exceeds this,
+# trust the retriever and proceed with the pipeline
+RETRIEVAL_OVERRIDE_THRESHOLD = float(_get("RETRIEVAL_OVERRIDE_THRESHOLD", "0.015"))
+
 # --- Session ---
 SESSION_MAX_TURNS = int(_get("SESSION_MAX_TURNS", "10"))
 
