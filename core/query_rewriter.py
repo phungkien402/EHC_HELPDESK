@@ -24,31 +24,54 @@ _client = OpenAI(base_url=f"{VLLM_BASE_URL}/v1", api_key="not-needed")
 
 SYSTEM_PROMPT = (
     "You are a query understanding assistant for EHC electronic medical record software support. "
-    "Your job is to read a user's message and extract the core technical problem they are experiencing, "
-    "expressed as a short, clear issue statement that matches how FAQ entries are written.\n\n"
+    "Your job is to read a user's message and rewrite it as a clear, searchable issue statement "
+    "that matches how FAQ entries are written.\n\n"
     "Rules:\n"
-    "1. Focus on WHAT the problem is, not HOW the user described it.\n"
+    "1. PRESERVE domain signal words — keep 'sai', 'lỗi', 'không được', 'bị', 'trắng xóa', "
+    "'không lên', 'không tìm thấy' etc. These words are critical for retrieval.\n"
     "2. Output a short statement (1 sentence), not a question.\n"
-    "3. Use technical terms that would appear in a FAQ title.\n"
-    "4. If the message is already a clear technical question, keep it as-is.\n"
-    "5. Output in Vietnamese. Return only the rewritten query — no explanation.\n"
-    "6. Prefix selection:\n"
-    "   - Use \"Lỗi...\" ONLY when the input describes a system error, crash, malfunction, or "
-    "unexpected behavior (e.g. \"bị lỗi\", \"không lên\", \"xoay hoài\", \"bắt update\").\n"
-    "   - Use \"Cách...\" when the input is a how-to or navigation question "
-    "(e.g. \"bấm vào đâu\", \"làm sao\", \"ở đâu\", \"muốn làm\").\n"
-    "   - Use \"Vị trí...\" when asking where something is located in the UI."
+    "3. Add the correct prefix:\n"
+    "   - 'Lỗi...' when the input describes an error, crash, malfunction, or unexpected behavior.\n"
+    "   - 'Cách...' when the input is a how-to or navigation question.\n"
+    "   - 'Vị trí...' when asking where something is in the UI.\n"
+    "4. Use technical terms that would appear in a FAQ title. Output in Vietnamese.\n"
+    "5. Return only the rewritten query — no explanation.\n\n"
+    "BAD examples (do not do this):\n"
+    "  'dịch vụ bị sai giá' → 'thay đổi giá dịch vụ'  ← WRONG, loses 'sai'\n"
+    "  'không in được'      → 'in phiếu'               ← WRONG, loses 'không được'\n\n"
+    "GOOD examples:\n"
+    "  'dịch vụ bị sai giá' → 'Cách sửa giá dịch vụ bị sai trong EHC'\n"
+    "  'không in được'      → 'Lỗi không in được phiếu trong EHC'\n"
+    "  'xử trí cứ xoay hoài không dừng' → 'Lỗi màn hình xoay mãi khi xử trí bệnh nhân'\n"
+    "  'in giấy ra viện lại ở đâu'      → 'Vị trí in lại giấy ra viện trong hệ thống'\n"
+    "  'BN ra viện rồi muốn sửa thông tin' → 'Cách sửa thông tin bệnh nhân sau khi ra viện'\n"
 )
 
 FEW_SHOT_EXAMPLES = [
-    ("merge patient records how?", "Cách gộp mã bệnh nhân"),
-    ("xử trí cứ xoay hoài không dừng", "Lỗi màn hình xoay mãi khi xử trí bệnh nhân"),
-    ("phần mềm bắt update mới vô được", "Lỗi phần mềm bắt buộc cập nhật mới đăng nhập được"),
-    ("in phiếu không lên form view làm sao", "Lỗi in phiếu không hiển thị form view"),
-    ("in giấy ra viện lại ở đâu", "Vị trí in lại giấy ra viện trong hệ thống"),
-    ("xem giúp tôi hẹn bệnh nhân nhưng hệ thống tự nhảy vào thứ 7 chủ nhật", "Lỗi module đặt hẹn tự chọn sai ngày trong tuần"),
-    ("BN ra viện rồi muốn sửa thông tin", "Cách sửa thông tin bệnh nhân sau khi đã xử trí ra viện"),
-    ("muốn hủy nhập viện thì bấm vào đâu", "Cách hủy nhập viện trong hệ thống EHC"),
+    # Error cases — preserve "lỗi/không/bị" signal
+    ("xử trí cứ xoay hoài không dừng",
+     "Lỗi màn hình xoay mãi khi xử trí bệnh nhân"),
+    ("phần mềm bắt update mới vô được",
+     "Lỗi phần mềm bắt buộc cập nhật mới đăng nhập được"),
+    ("in phiếu không lên form view làm sao",
+     "Lỗi in phiếu không hiển thị form view"),
+    ("dịch vụ bị sai giá",
+     "Cách sửa giá dịch vụ bị sai trong EHC"),
+    ("không in được vỏ bệnh án",
+     "Lỗi không in được vỏ bệnh án trong EHC"),
+    ("quét thẻ BHYT báo không tìm thấy bệnh nhân",
+     "Lỗi quét thẻ bảo hiểm y tế không tìm thấy bệnh nhân"),
+    # How-to cases — add clarifying context, keep domain wording
+    ("in giấy ra viện lại ở đâu",
+     "Vị trí in lại giấy ra viện trong hệ thống"),
+    ("muốn hủy nhập viện thì bấm vào đâu",
+     "Cách hủy nhập viện trong hệ thống EHC"),
+    ("BN ra viện rồi muốn sửa thông tin",
+     "Cách sửa thông tin bệnh nhân sau khi đã ra viện"),
+    ("merge patient records how?",
+     "Cách gộp mã bệnh nhân"),
+    ("thuốc hết tồn kho làm sao",
+     "Cách xử lý khi thuốc hết tồn kho trong kho dược"),
 ]
 
 
@@ -192,15 +215,22 @@ ANALYZE_AND_REWRITE_PROMPT = (
     "Bạn là trợ lý EHC. Dựa vào tài liệu tham khảo (nếu có), hãy thực hiện 3 việc:\n"
     "1. Mô tả ngắn gọn vấn đề người dùng đang gặp (1 câu, ngôi thứ 3)\n"
     "2. Viết lại câu hỏi thành query tìm kiếm ngắn gọn, formal tiếng Việt\n"
-    "3. Đánh giá xem câu hỏi có đủ thông tin để trả lời không\n"
+    "3. Đánh giá xem câu hỏi có đủ thông tin để trả lời không\n\n"
     "Trả về đúng 3 dòng theo format:\n"
     "INTENT: <mô tả vấn đề>\n"
     "QUERY: <query tìm kiếm>\n"
     "ANSWERABLE: <yes | no | unclear>\n\n"
+    "Hướng dẫn viết QUERY:\n"
+    "- GIỮ NGUYÊN các từ chỉ triệu chứng/lỗi: 'sai', 'lỗi', 'không được', 'bị', "
+    "'trắng xóa', 'không lên', 'không tìm thấy', 'xoay hoài' v.v.\n"
+    "- CHỈ làm rõ và formal hóa — KHÔNG abstract bỏ signal domain quan trọng.\n"
+    "- Thêm prefix đúng: 'Lỗi...' cho lỗi/sự cố, 'Cách...' cho how-to.\n"
+    "- Ví dụ đúng: 'dịch vụ bị sai giá' → 'Cách sửa giá dịch vụ bị sai'\n"
+    "- Ví dụ sai:  'dịch vụ bị sai giá' → 'thay đổi giá dịch vụ' (mất chữ 'sai')\n\n"
     "Hướng dẫn cho ANSWERABLE:\n"
     "- yes: câu hỏi đủ thông tin, có thể tìm kiếm và trả lời\n"
-    "- unclear: câu hỏi quá mơ hồ — không đề cập module nào, lỗi gì, thao tác nào, "
-    "hoặc loại tài liệu nào. Ví dụ: 'mình không in được', 'bị lỗi rồi', 'không vào được'\n"
+    "- unclear: câu hỏi quá mơ hồ — không đề cập module nào, lỗi gì, thao tác nào. "
+    "Ví dụ: 'mình không in được', 'bị lỗi rồi', 'không vào được'\n"
     "- no: hoàn toàn không liên quan hoặc không có tài liệu tham khảo\n\n"
     "Nếu lịch sử hội thoại đã làm rõ vấn đề → ANSWERABLE=yes dù câu hỏi hiện tại ngắn.\n"
     "Nếu không có tài liệu tham khảo nhưng câu hỏi rõ ràng → ANSWERABLE=yes."
