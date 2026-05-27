@@ -12,6 +12,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from core.query_rewriter import expand_abbreviations
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -83,7 +84,8 @@ def classify(query: str) -> bool:
         return True
 
     try:
-        prompt = CLASSIFY_PROMPT.format(terminology=_TERMINOLOGY, query=query.strip())
+        prompt = CLASSIFY_PROMPT.format(terminology=_TERMINOLOGY, query=expand_abbreviations(query.strip()))
+
         response = _client.chat.completions.create(
             model=VLLM_MODEL,
             messages=[{"role": "user", "content": prompt}],

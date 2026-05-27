@@ -85,8 +85,8 @@ class SlackAdapter(BaseAdapter):
 
     def format_response(self, answer_text: str, confidence: float) -> str:
         """Format response for Slack — plain text with confidence footer."""
-        if confidence > 0:
-            return f"{answer_text}\n\n📊 Độ tin cậy: {confidence:.0%}"
+        # if confidence > 0:
+        #     return f"{answer_text}\n\n📊 Độ tin cậy: {confidence:.0%}"
         return answer_text
 
     async def send_message(self, channel_id: str, text: str) -> None:
