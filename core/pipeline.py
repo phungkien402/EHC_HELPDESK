@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from config import RETRIEVER_TOP_K, RERANKER_TOP_N, CONFIDENCE_THRESHOLD, MAINTENANCE_MODE
+from config import RETRIEVER_TOP_K, RERANKER_TOP_N, CONFIDENCE_THRESHOLD, MAINTENANCE_MODE, SHORTCUT_SCORE_THRESHOLD
 from core.models import Message, Answer
 from core import query_rewriter, retriever, reranker, generator, confidence, fallback
 from core.query_rewriter import analyze_and_rewrite
@@ -126,43 +126,64 @@ def run(message: Message, session_history: list) -> Answer:
     print(f"\n[PIPELINE] Step 1: Fast retrieve (top 3)")
     fast_chunks = retriever.retrieve(message.text, top_k=3)
 
-    # Step 2: Analyze intent + rewrite query + answerability check in a single LLM call
-    print(f"\n[PIPELINE] Step 2: Analyze + Rewrite (single call)")
-    try:
-        if fast_chunks:
-            user_intent, rewritten, answerable = analyze_and_rewrite(
-                message.text, chunks=fast_chunks, session_history=session_history
-            )
-        else:
-            user_intent, rewritten, answerable = analyze_and_rewrite(
-                message.text, session_history=session_history
-            )
-    except LLMUnavailableError:
-        print("[PIPELINE] vLLM unavailable during analyze+rewrite → LLM unavailable response")
-        return Answer(
-            text="⚠️ Hệ thống AI đang bận hoặc đang khởi động lại, vui lòng thử lại sau 1–2 phút. Nếu vẫn lỗi, liên hệ bộ phận IT để kiểm tra server.",
-            confidence=0.0,
-            source_chunks=[],
-            is_fallback=True,
-            rewritten_question="",
-        )
-    print(f"[PIPELINE] analyze_and_rewrite: intent=\"{user_intent}\" query=\"{rewritten}\"")
-
-    # Step 2.5: Clarify if query is too vague
-    if answerable == "unclear":
-        print(f"[PIPELINE] Query too vague (answerable=unclear) → clarify")
-        clarify_text = _build_clarify_message(message.text, user_intent)
-        return Answer(
-            text=clarify_text,
-            confidence=0.0,
-            source_chunks=[],
-            is_fallback=True,
-            rewritten_question=rewritten,
+    # Adaptive shortcut: if top result is highly confident, skip rewrite + full retrieve
+    _shortcut = (
+        bool(fast_chunks)
+        and fast_chunks[0].score >= SHORTCUT_SCORE_THRESHOLD
+    )
+    if _shortcut:
+        print(
+            f"[PIPELINE] Shortcut: top1 score={fast_chunks[0].score:.4f} "
+            f">= {SHORTCUT_SCORE_THRESHOLD} — skipping rewrite + full retrieve"
         )
 
-    # Step 3: Full retrieve with rewritten query
-    print(f"\n[PIPELINE] Step 3: Full retrieve (top {RETRIEVER_TOP_K})")
-    chunks = retriever.retrieve(rewritten, top_k=RETRIEVER_TOP_K)
+    if not _shortcut:
+        # Step 2: Analyze intent + rewrite query + answerability check in a single LLM call
+        print(f"\n[PIPELINE] Step 2: Analyze + Rewrite (single call)")
+        try:
+            if fast_chunks:
+                user_intent, rewritten, answerable = analyze_and_rewrite(
+                    message.text, chunks=fast_chunks, session_history=session_history
+                )
+            else:
+                user_intent, rewritten, answerable = analyze_and_rewrite(
+                    message.text, session_history=session_history
+                )
+        except LLMUnavailableError:
+            print("[PIPELINE] vLLM unavailable during analyze+rewrite → LLM unavailable response")
+            return Answer(
+                text="⚠️ Hệ thống AI đang bận hoặc đang khởi động lại, vui lòng thử lại sau 1–2 phút. Nếu vẫn lỗi, liên hệ bộ phận IT để kiểm tra server.",
+                confidence=0.0,
+                source_chunks=[],
+                is_fallback=True,
+                rewritten_question="",
+            )
+        print(f"[PIPELINE] analyze_and_rewrite: intent=\"{user_intent}\" query=\"{rewritten}\"")
+
+        # Step 2.5: Clarify if query is too vague
+        if answerable == "unclear":
+            print(f"[PIPELINE] Query too vague (answerable=unclear) → clarify")
+            clarify_text = _build_clarify_message(message.text, user_intent)
+            return Answer(
+                text=clarify_text,
+                confidence=0.0,
+                source_chunks=[],
+                is_fallback=True,
+                rewritten_question=rewritten,
+            )
+    else:
+        # Shortcut path: use original query, skip analysis
+        rewritten = message.text
+        answerable = "yes"
+        user_intent = None
+
+    if not _shortcut:
+        # Step 3: Full retrieve with rewritten query
+        print(f"\n[PIPELINE] Step 3: Full retrieve (top {RETRIEVER_TOP_K})")
+        chunks = retriever.retrieve(rewritten, top_k=RETRIEVER_TOP_K)
+    else:
+        # Shortcut path: use fast chunks directly
+        chunks = fast_chunks
 
     if not chunks:
         print("[PIPELINE] No chunks retrieved → fallback")

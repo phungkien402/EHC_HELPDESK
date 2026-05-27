@@ -52,6 +52,9 @@ RETRIEVER_TOP_K = int(_get("RETRIEVER_TOP_K", "10"))
 RERANKER_TOP_N = int(_get("RERANKER_TOP_N", "3"))
 CONFIDENCE_THRESHOLD = float(_get("CONFIDENCE_THRESHOLD", "0.4"))
 
+# Adaptive shortcut: skip rewrite + full retrieve when fast retrieval is confident
+SHORTCUT_SCORE_THRESHOLD = float(_get("SHORTCUT_SCORE_THRESHOLD", "0.85"))
+
 # --- Session ---
 SESSION_MAX_TURNS = int(_get("SESSION_MAX_TURNS", "10"))
 
