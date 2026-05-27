@@ -17,6 +17,7 @@ Run standalone: python -m core.pipeline
 import sys
 import time
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -26,6 +27,7 @@ from core import query_rewriter, retriever, reranker, generator, confidence, fal
 from core.query_rewriter import analyze_and_rewrite
 from core.generator import GeneratorError, LLMUnavailableError
 from core.intent_guard import classify, chat_fallback
+from core.generator import _client as _llm_client
 
 # --- Maintenance mode (toggled at runtime via /admin/maintenance) ---
 _maintenance_mode: bool = MAINTENANCE_MODE
@@ -54,8 +56,7 @@ def _build_clarify_message(query: str, intent: str | None) -> str:
     Uses a simple LLM call to generate a natural follow-up question.
     Falls back to a generic message if vLLM is unavailable.
     """
-    from config import VLLM_BASE_URL, VLLM_MODEL
-    from openai import OpenAI, APIConnectionError as _APIConnectionError
+    from config import VLLM_MODEL
 
     _CLARIFY_PROMPT = (
         "Bạn là trợ lý hỗ trợ phần mềm EHC. Người dùng gửi tin nhắn mơ hồ.\n"
@@ -66,8 +67,7 @@ def _build_clarify_message(query: str, intent: str | None) -> str:
     _DEFAULT = "Bạn đang gặp vấn đề cụ thể nào? Thấy thông báo lỗi gì không?"
 
     try:
-        _c = OpenAI(base_url=f"{VLLM_BASE_URL}/v1", api_key="not-needed")
-        resp = _c.chat.completions.create(
+        resp = _llm_client.chat.completions.create(
             model=VLLM_MODEL,
             messages=[
                 {"role": "system", "content": _CLARIFY_PROMPT},
@@ -110,8 +110,15 @@ def run(message: Message, session_history: list) -> Answer:
     print(f"[PIPELINE] Input: \"{message.text}\"")
     print(f"{'='*60}")
 
-    # Guard: off-topic / small talk (LLM classifier)
-    if classify(message.text):
+    # Guard + Step 1: run intent classify and fast retrieve in parallel
+    print(f"\n[PIPELINE] Guard + Step 1: parallel classify + fast retrieve")
+    with ThreadPoolExecutor(max_workers=2) as _pool:
+        _f_classify = _pool.submit(classify, message.text)
+        _f_retrieve = _pool.submit(retriever.retrieve, message.text, 3)
+        _is_offtopic = _f_classify.result()
+        fast_chunks = _f_retrieve.result()
+
+    if _is_offtopic:
         print(f"[PIPELINE] Off-topic detected: \"{message.text}\" → chat fallback")
         fallback_text = chat_fallback(message.text)
         return Answer(
@@ -121,10 +128,6 @@ def run(message: Message, session_history: list) -> Answer:
             is_fallback=False,
             rewritten_question=message.text,
         )
-
-    # Step 1: Fast retrieve — embed original query, get top 3 (no reranking)
-    print(f"\n[PIPELINE] Step 1: Fast retrieve (top 3)")
-    fast_chunks = retriever.retrieve(message.text, top_k=3)
 
     # Adaptive shortcut: if top result is highly confident, skip rewrite + full retrieve
     _shortcut = (

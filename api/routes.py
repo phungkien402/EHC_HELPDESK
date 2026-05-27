@@ -9,6 +9,7 @@ POST /admin/reindex       — trigger a fresh data pull from Redmine
 Run: uvicorn api.routes:app --host 0.0.0.0 --port 8080
 """
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -27,6 +28,8 @@ from adapters.telegram_adapter import TelegramAdapter
 from adapters.zalo_adapter import ZaloAdapter
 from adapters.web_adapter import WebAdapter
 from adapters.slack_adapter import SlackAdapter
+from core.retriever import _client as _qdrant_client
+from core.bm25_index import get_bm25_index
 
 app = FastAPI(title="EHC AI Helpdesk")
 
@@ -37,6 +40,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def _startup():
+    """Pre-build BM25 index so first request is not slow."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, get_bm25_index, _qdrant_client)
+    print("[STARTUP] BM25 index pre-built")
 
 # Shared instances
 _session_mgr = SessionManager(max_turns=SESSION_MAX_TURNS)
@@ -125,7 +136,8 @@ async def handle_webhook(platform: str, request: Request, background_tasks: Back
     session_history = _session_mgr.get_history(message.session_id)
 
     # Run RAG pipeline
-    answer = run_pipeline(message, session_history)
+    loop = asyncio.get_event_loop()
+    answer = await loop.run_in_executor(None, run_pipeline, message, session_history)
 
     # Store turns in session
     _session_mgr.add_turn(message.session_id, "user", message.text)
