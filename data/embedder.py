@@ -19,7 +19,7 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 
 from config import QDRANT_URL, QDRANT_COLLECTION, EMBED_MODEL
 from data.ingestor import Document
-from data.preprocessor import build_embedding_text, build_raw_text
+from data.preprocessor import build_embedding_text, build_raw_text, infer_intent_type, infer_module
 
 
 def embed_and_store(docs: list[Document], recreate: bool = False) -> int:
@@ -100,6 +100,8 @@ def embed_and_store(docs: list[Document], recreate: bool = False) -> int:
                     "url": doc.url,
                     "chunk_text": raw_text,
                     "embedding_text": embedding_text,
+                    "intent_type": infer_intent_type(doc.subject, doc.description),
+                    "module": infer_module(doc.subject, doc.description),
                 },
             )
             for doc, embedding, raw_text, embedding_text

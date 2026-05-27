@@ -23,3 +23,4 @@ models/
 
 # Server-specific service files (contain credentials)
 scripts/ehc-monitor.service
+EHC_IMPROVE_INDEXING.md

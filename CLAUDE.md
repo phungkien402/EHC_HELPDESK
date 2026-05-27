@@ -6,7 +6,7 @@ Working agreement for Claude Code on this repository.
 
 - Server: Dell R730xd, 2x V100 16GB, Ubuntu
 - Project: EHC AI Helpdesk (on-premise RAG chatbot, Vietnamese)
-- Repo path: `/home/phungkien/EHC_HELPDESK/ehc-helpdesk`
+- Repo path: `/home/phungkien/EHC_HELPDESK/`
 - Remote: `git@github.com:phungkien402/EHC_HELPDESK.git` (SSH)
 
 ## Commands
@@ -26,19 +26,19 @@ Working agreement for Claude Code on this repository.
 /bin/bash /home/phungkien/EHC_HELPDESK/ehc-helpdesk/run.sh -m <module>
 
 # Examples:
-/bin/bash /home/phungkien/EHC_HELPDESK/ehc-helpdesk/run.sh -m core.pipeline
-/bin/bash /home/phungkien/EHC_HELPDESK/ehc-helpdesk/run.sh -m tests.evaluate
-/bin/bash /home/phungkien/EHC_HELPDESK/ehc-helpdesk/run.sh -m tests.debug_query "your question"
-/bin/bash /home/phungkien/EHC_HELPDESK/ehc-helpdesk/run.sh -m uvicorn api.routes:app --host 0.0.0.0 --port 8080
+/bin/bash /home/phungkien/EHC_HELPDESK/run.sh -m core.pipeline
+/bin/bash /home/phungkien/EHC_HELPDESK/run.sh -m tests.debug_query "your question"
+/bin/bash /home/phungkien/EHC_HELPDESK/run.sh -m uvicorn api.routes:app --host 0.0.0.0 --port 8080
+/bin/bash /home/phungkien/EHC_HELPDESK/run.sh -m tests.evaluate
 ```
 
 ## Git Workflow
 
 ```bash
 # Always run git from the repo directory:
-/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK/ehc-helpdesk && git add -A && git status"
-/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK/ehc-helpdesk && git commit -m 'your message'"
-/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK/ehc-helpdesk && git push origin main"
+/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK && git commit -m 'your message'"
+/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK && git add -A && git status"
+/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK && git push origin main"
 ```
 
 ### Branching Rules
@@ -64,3 +64,28 @@ Working agreement for Claude Code on this repository.
 4. Reviewer (via Cowork) reviews
 5. Fix any issues raised
 6. Merge to main only after approval
+
+## Subagents
+
+Spawn subagents to isolate context, parallelize independent work, or offload bulk mechanical tasks. Don't spawn when the parent needs the reasoning, when synthesis requires holding things together, or when spawn overhead dominates.
+
+Pick the cheapest model that can do the subtask well:
+- Haiku: bulk mechanical work, no judgment
+- Sonnet: scoped research, code exploration, in-scope synthesis
+- Opus: subtasks needing real planning or tradeoffs
+
+If a subagent realizes it needs a higher tier than itself, return to the parent.
+
+Parent owns final output and cross-spawn synthesis. User instructions override.
+
+## Preferred Tools
+
+### Data Fetching
+
+1. **WebFetch**: free, text-only, works on public pages that don't block bots.
+2. **agent-browser CLI**: free, local Rust CLI + Chrome via CDP. For dynamic pages or auth walls that WebFetch can't handle. Returns the accessibility tree with element refs (@e1, @e2). ~82% fewer tokens than screenshot-based tools. Install: `npm i -g agent-browser && agent-browser install`. Use `snapshot` for AI-friendly DOM state, element refs for interaction.
+3. **Notice recurring fetch patterns and propose wrapping them as dedicated tools.** When the same fetch/parse logic comes up more than once, suggest wrapping it as a named tool (e.g. a skill file or a .py script that calls `agent-browser` with the snapshot and extraction steps baked in for that source).
+
+### PDF Files
+
+Use 'pdftotext', not the 'Read' tool. Use 'Read' only when the user directly asks to analyze images or charts inside the document. Read loads PDFs as images.

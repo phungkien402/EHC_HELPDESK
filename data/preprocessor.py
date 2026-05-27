@@ -60,6 +60,112 @@ SYNONYM_MAP = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Intent type classification — rule-based keyword matching
+# Maps ticket subject/description to a high-level intent category
+# ---------------------------------------------------------------------------
+INTENT_TYPE_MAP: dict[str, list[str]] = {
+    "price_change":      ["sửa giá", "đổi giá", "thay đổi giá", "sai giá", "lệch giá",
+                          "chỉnh giá", "đơn giá", "giá dịch vụ", "giá viện phí"],
+    "print_form":        ["in phiếu", "in vỏ", "in bảng kê", "in giấy", "in toa",
+                          "xuất phiếu", "in lại", "in ấn", "không in được", "trắng xóa"],
+    "insurance_switch":  ["đổi đối tượng", "chuyển bhyt", "đổi bhyt", "đổi loại đối tượng",
+                          "chuyển đối tượng", "sai đối tượng", "bhyt không đúng"],
+    "drug_return":       ["trả thuốc", "hoàn thuốc", "hủy thuốc", "trả lại thuốc",
+                          "thuốc đã lĩnh", "trả lại dược"],
+    "cancel_service":    ["hủy dịch vụ", "hủy chỉ định", "hủy phiếu", "xóa dịch vụ",
+                          "hủy kết quả", "hủy phẫu thuật"],
+    "transfer":          ["chuyển khoa", "chuyển viện", "chuyển bệnh nhân",
+                          "điều chuyển", "chuyển phòng"],
+    "merge_patient":     ["gộp hồ sơ", "gộp mã", "trùng hồ sơ", "bệnh nhân trùng",
+                          "gộp bệnh nhân", "trùng mã"],
+    "login_error":       ["đăng nhập", "không vào được", "không đăng nhập được",
+                          "lỗi đăng nhập", "không login", "bắt update", "bắt cập nhật"],
+    "search_lookup":     ["tra cứu", "tìm kiếm", "tìm bệnh nhân", "không tìm thấy",
+                          "tìm không ra", "tìm kiếm bệnh nhân"],
+    "data_sync":         ["đồng bộ", "không cập nhật", "không hiển thị", "dữ liệu cũ",
+                          "chưa lên", "không lên"],
+}
+
+# ---------------------------------------------------------------------------
+# HIS module classification — rule-based keyword matching
+# ---------------------------------------------------------------------------
+MODULE_MAP: dict[str, list[str]] = {
+    "outpatient":  ["ngoại trú", "khám bệnh", "phòng khám", "tiếp nhận", "đón tiếp",
+                    "đặt hẹn", "khám ngoại trú"],
+    "inpatient":   ["nội trú", "điều trị", "nhập viện", "ra viện", "bệnh án",
+                    "điều dưỡng", "vỏ bệnh án", "hsba"],
+    "pharmacy":    ["dược", "thuốc", "kho thuốc", "nhà thuốc", "toa thuốc",
+                    "kê đơn", "phát thuốc", "xuất thuốc", "lĩnh thuốc"],
+    "laboratory":  ["xét nghiệm", "cận lâm sàng", "cls", "lis", "kết quả xét nghiệm",
+                    "phiếu xét nghiệm"],
+    "imaging":     ["chẩn đoán hình ảnh", "x-quang", "siêu âm", "cdha", "pacs",
+                    "minipacs", "ris", "phim", "kết quả cdha"],
+    "billing":     ["viện phí", "thanh toán", "thu ngân", "bảng kê", "thu tiền",
+                    "thu phí", "vp", "bảng kê 6556"],
+    "insurance":   ["bảo hiểm", "bhyt", "đối tượng bhyt", "bảo hiểm y tế",
+                    "thẻ bhyt", "quét thẻ bhyt"],
+    "surgery":     ["phẫu thuật", "thủ thuật", "mổ", "pttt", "gây mê",
+                    "hồi sức", "phòng mổ"],
+    "admin":       ["hành chính", "danh mục", "cấu hình", "hệ thống",
+                    "tài liệu tùy biến", "mẫu in", "template", "quản trị"],
+    "report":      ["báo cáo", "thống kê", "xuất báo cáo", "in báo cáo"],
+}
+
+
+def infer_intent_type(subject: str, description: str) -> str | None:
+    """
+    Infer the intent type from subject + description using keyword matching.
+    Returns the first matching intent key, or None if no match.
+    """
+    combined = (subject + " " + description).lower()
+    for intent, keywords in INTENT_TYPE_MAP.items():
+        for kw in keywords:
+            if kw in combined:
+                return intent
+    return None
+
+
+def infer_module(subject: str, description: str) -> str | None:
+    """
+    Infer the HIS module from subject + description using keyword matching.
+    Returns the first matching module key, or None if no match.
+    """
+    combined = (subject + " " + description).lower()
+    for module, keywords in MODULE_MAP.items():
+        for kw in keywords:
+            if kw in combined:
+                return module
+    return None
+
+
+def build_aliases(subject: str, description: str) -> list[str]:
+    """
+    Build a list of domain aliases for the ticket.
+    Combines: SYNONYM_MAP matches + abbreviation expansions found in text.
+    Returns up to 6 alias strings.
+    """
+    combined = (subject + " " + description).lower()
+    aliases = []
+
+    for key, synonyms in SYNONYM_MAP.items():
+        if key in combined:
+            for s in synonyms:
+                if s not in aliases:
+                    aliases.append(s)
+        if len(aliases) >= 6:
+            break
+
+    for abbr, expanded in ABBREV_MAP.items():
+        if re.search(r'\b' + re.escape(abbr) + r'\b', combined):
+            if expanded not in aliases:
+                aliases.append(expanded)
+        if len(aliases) >= 6:
+            break
+
+    return aliases[:6]
+
+
 def _load_terminology_terms() -> list[str]:
     """Load all terms from data/terminology.json for keyword extraction."""
     term_path = Path(__file__).parent.parent / "data" / "terminology.json"
@@ -135,9 +241,13 @@ def extract_keywords(subject: str, description: str) -> list[str]:
 def build_embedding_text(subject: str, description: str) -> str:
     """
     Build enriched text for embedding.
+
     Structure:
-        Câu hỏi: <subject expanded>
-        Hướng dẫn: <description expanded>
+        Câu hỏi: <expanded subject>
+        Hướng dẫn: <expanded description>
+        INTENT: <intent_type>
+        MODULE: <his_module>
+        ALIASES: <alias1>, <alias2>, ...
         Từ khóa: <keyword1>, <keyword2>, ...
 
     This text is NOT shown to users — only used to generate the vector.
@@ -145,11 +255,20 @@ def build_embedding_text(subject: str, description: str) -> str:
     expanded_subject = expand_abbreviations(subject)
     expanded_description = expand_abbreviations(description)
     keywords = extract_keywords(subject, description)
+    intent = infer_intent_type(subject, description)
+    module = infer_module(subject, description)
+    aliases = build_aliases(subject, description)
 
     lines = [
         f"Câu hỏi: {expanded_subject}",
         f"Hướng dẫn: {expanded_description}",
     ]
+    if intent:
+        lines.append(f"INTENT: {intent}")
+    if module:
+        lines.append(f"MODULE: {module}")
+    if aliases:
+        lines.append(f"ALIASES: {', '.join(aliases)}")
     if keywords:
         lines.append(f"Từ khóa: {', '.join(keywords)}")
 
