@@ -92,7 +92,9 @@
       "bảng kê 6556",
       "mã bệnh nhân",
       "gộp bệnh nhân",
-      "trùng hồ sơ"
+      "trùng hồ sơ",
+      "hồ sơ bệnh nhân",
+      "quản lý bệnh nhân"
     ]
   },
   "actions": {
@@ -126,7 +128,8 @@
       "gộp mã",
       "tách",
       "merge",
-      "gộp hồ sơ"
+      "gộp hồ sơ",
+      "tra cứu bệnh nhân"
     ]
   },
   "error_descriptions": {
