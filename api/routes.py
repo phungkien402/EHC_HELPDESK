@@ -1,29 +1,44 @@
 """
 FastAPI application routes.
 
-POST /webhook/{platform}  — receive messages from Zalo / Telegram / Web
+POST /webhook/{platform}  — receive messages from Zalo / Telegram / Web / Slack
 GET  /health              — health check
-GET  /admin/logs          — view unanswered / fallback query logs
+GET  /admin/logs          — paged query logs (filters: limit, fallback_only, platform, search)
 POST /admin/reindex       — trigger a fresh data pull from Redmine
+POST /admin/maintenance   — toggle maintenance mode (auth: ADMIN_TOKEN)
+GET  /admin/cache-stats   — cache sizes
+POST /admin/cache-clear   — flush caches
+
+Plus admin analytics from api/admin.py:
+  /admin/metrics, /admin/logs/{id}, /admin/failing,
+  /admin/eval/results, /admin/eval/run, /admin/system/status
 
 Run: uvicorn api.routes:app --host 0.0.0.0 --port 8080
+
+CHANGES (v2 — admin UI integration):
+  - Latency is measured around the pipeline call and passed to the logger
+  - /admin/logs now supports platform + search filters
+  - The new analytics router is mounted via api.admin
 """
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+
 from config import SESSION_MAX_TURNS, ADMIN_TOKEN
 from core.models import Message
 from core.pipeline import run as run_pipeline, set_maintenance_mode, is_maintenance_mode
 from api.session import SessionManager
 from api.logger import QueryLogger
+from api.admin import router as admin_router
 from adapters.telegram_adapter import TelegramAdapter
 from adapters.zalo_adapter import ZaloAdapter
 from adapters.web_adapter import WebAdapter
@@ -32,7 +47,6 @@ from core.retriever import _client as _qdrant_client
 from core.bm25_index import get_bm25_index
 
 app = FastAPI(title="EHC AI Helpdesk")
-app.mount("/admin", StaticFiles(directory="admin_console", html=True), name="admin_console")
 
 # CORS for web UI
 app.add_middleware(
@@ -41,6 +55,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount admin analytics endpoints
+app.include_router(admin_router)
 
 
 @app.on_event("startup")
@@ -73,6 +90,12 @@ def health():
     return {"status": "ok", "service": "ehc-helpdesk", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
+# Serve the admin console (single-page app w/ siblings: data.js, styles.css, *.jsx)
+_ADMIN_DIR = Path(__file__).parent.parent / "ui" / "admin"
+if _ADMIN_DIR.exists():
+    app.mount("/admin-ui", StaticFiles(directory=str(_ADMIN_DIR), html=True), name="admin_ui")
+
+
 @app.get("/")
 def serve_ui():
     """Serve the web chat UI."""
@@ -89,7 +112,6 @@ async def handle_webhook(platform: str, request: Request, background_tasks: Back
     Selects the appropriate adapter, parses the message, runs the pipeline,
     logs the query, and sends the response back.
     """
-    # Validate platform
     adapter = _adapters.get(platform)
     if adapter is None:
         raise HTTPException(status_code=400, detail=f"Unknown platform: {platform}")
@@ -99,7 +121,6 @@ async def handle_webhook(platform: str, request: Request, background_tasks: Back
     if platform == "slack" and "application/x-www-form-urlencoded" in content_type:
         form = await request.form()
         form_data = dict(form)
-        # Slash commands have a "command" field
         if "command" in form_data:
             response_text = await adapter.handle_slash_command(form_data)
             return JSONResponse(
@@ -107,7 +128,6 @@ async def handle_webhook(platform: str, request: Request, background_tasks: Back
                 status_code=200,
             )
 
-    # Parse raw payload
     try:
         raw = await request.json()
     except Exception:
@@ -130,22 +150,23 @@ async def handle_webhook(platform: str, request: Request, background_tasks: Back
     # Parse into Message
     message = adapter.parse_message(raw)
     if message is None:
-        # Non-actionable event (delivery receipt, typing, etc.) — acknowledge
         return {"status": "ignored"}
 
     # Get session history
     session_history = _session_mgr.get_history(message.session_id)
 
-    # Run RAG pipeline
+    # Run RAG pipeline (track latency)
     loop = asyncio.get_event_loop()
+    _t0 = time.perf_counter()
     answer = await loop.run_in_executor(None, run_pipeline, message, session_history)
+    _latency_s = time.perf_counter() - _t0
 
     # Store turns in session
     _session_mgr.add_turn(message.session_id, "user", message.text)
     _session_mgr.add_turn(message.session_id, "bot", answer.text)
 
-    # Log the query
-    _logger.log(message, answer)
+    # Log the query (with latency)
+    _logger.log(message, answer, latency_s=_latency_s)
 
     # Format response for platform
     response_text = adapter.format_response(
@@ -155,23 +176,20 @@ async def handle_webhook(platform: str, request: Request, background_tasks: Back
 
     # Send response back via platform API (async, in background for Telegram/Zalo/Slack)
     if platform != "web":
-        # For Telegram/Zalo/Slack, send via their API in background
         chat_id = message.user_id
         if platform == "telegram":
-            # Use chat_id from session_id (tg_{chat_id})
             chat_id = message.session_id.replace("tg_", "")
         elif platform == "slack":
-            # Pass full session_id; adapter will extract channel and thread_ts
             chat_id = message.session_id
         background_tasks.add_task(adapter.send_message, chat_id, response_text)
 
-    # Return response (used directly by web adapter)
     return {
         "status": "ok",
         "answer": answer.text,
         "confidence": answer.confidence,
         "is_fallback": answer.is_fallback,
         "rewritten_question": answer.rewritten_question,
+        "latency_s": round(_latency_s, 3),
         "sources": [
             {
                 "subject": c.metadata.get("subject", ""),
@@ -184,9 +202,19 @@ async def handle_webhook(platform: str, request: Request, background_tasks: Back
 
 
 @app.get("/admin/logs")
-async def get_logs(limit: int = 50, fallback_only: bool = False):
-    """Return query logs as JSON. Optionally filter to fallback-only."""
-    logs = _logger.read_logs(limit=limit, fallback_only=fallback_only)
+async def get_logs(
+    limit: int = 50,
+    fallback_only: bool = False,
+    platform: str | None = None,
+    search: str | None = None,
+):
+    """Return query logs as JSON. Supports filters used by the admin UI table."""
+    logs = _logger.read_logs(
+        limit=limit,
+        fallback_only=fallback_only,
+        platform=platform,
+        search=search,
+    )
     return {"count": len(logs), "logs": logs}
 
 
@@ -202,7 +230,6 @@ async def trigger_reindex(background_tasks: BackgroundTasks):
 @app.post("/admin/maintenance")
 async def toggle_maintenance(request: Request):
     """Toggle maintenance mode at runtime. Requires ADMIN_TOKEN."""
-    # Auth check
     if not ADMIN_TOKEN:
         raise HTTPException(status_code=500, detail="ADMIN_TOKEN not configured")
 

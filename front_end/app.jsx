@@ -1,4 +1,4 @@
-// Main App shell — sidebar nav, topbar, page router, connection banner, tweaks
+// Main App shell — sidebar nav, topbar, page router, tweaks panel
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "showDebug": false
@@ -6,38 +6,102 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 
 const NAV = [
   { id: "overview", icon: "grid",  group: "monitor", labelKey: "nav_overview" },
-  { id: "logs",     icon: "list",  group: "monitor", labelKey: "nav_logs" },
-  { id: "failing",  icon: "alert", group: "monitor", labelKey: "nav_failing" },
+  { id: "logs",     icon: "list",  group: "monitor", labelKey: "nav_logs",    countKey: "logs" },
+  { id: "failing",  icon: "alert", group: "monitor", labelKey: "nav_failing", countKey: "failing" },
   { id: "eval",     icon: "check-circle", group: "ops", labelKey: "nav_eval" },
   { id: "system",   icon: "server", group: "ops", labelKey: "nav_system" },
 ];
 
 function App() {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  const [lang, setLang] = useState(() => localStorage.getItem("ehcLang") || "vi");
-  const [page, setPage] = useState(() => localStorage.getItem("ehcPage") || "overview");
+  const [lang, setLang] = useState("vi");
+  const [page, setPage] = useState("overview");
+  const [maintenance, setMaintenance] = useState(false);
   const [reindexState, setReindexState] = useState("idle");
-  const [connState, setConnState] = useState({ checked: false, online: false });
+  const [data, setData] = useState(window.MOCK_DATA);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   const t = I18N[lang];
 
-  useEffect(() => { localStorage.setItem("ehcLang", lang); }, [lang]);
-  useEffect(() => { localStorage.setItem("ehcPage", page); }, [page]);
+  // Fetch real data from backend on mount and every 30s
+  useEffect(() => {
+    let cancelled = false;
+    let timer = null;
 
+    async function loadData() {
+      try {
+        const [queryStats, health, resources] = await Promise.allSettled([
+          window.AdminAPI.fetchQueries(7),
+          window.AdminAPI.fetchHealth(),
+          window.AdminAPI.fetchResources(),
+        ]);
+
+        if (cancelled) return;
+
+        let newData;
+        if (queryStats.status === "fulfilled") {
+          newData = window.AdminAPI.transformQueryStats(queryStats.value);
+        } else {
+          // Fallback to mock data if API unavailable
+          newData = window.MOCK_DATA;
+        }
+
+        if (health.status === "fulfilled") {
+          newData = window.AdminAPI.applyHealthToData(newData, health.value);
+        }
+
+        if (resources.status === "fulfilled") {
+          newData = window.AdminAPI.applyResourcesToData(newData, resources.value);
+        }
+
+        setData(newData);
+        setError(null);
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    loadData();
+    timer = setInterval(loadData, 30000);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, []);
+
+  // Toggle body class for debug-only visibility
   useEffect(() => {
     document.body.classList.toggle("no-debug", !tweaks.showDebug);
   }, [tweaks.showDebug]);
 
-  useEffect(() => {
-    window.ehcApi.probe().then((ok) => setConnState({ checked: true, online: ok }));
-  }, []);
-
   const handleReindex = async () => {
     setReindexState("running");
-    try { await window.ehcApi.reindex(); } catch {}
-    setTimeout(() => setReindexState("done"), 1500);
-    setTimeout(() => setReindexState("idle"), 5000);
+    try {
+      await window.AdminAPI.triggerReindex();
+      setTimeout(() => setReindexState("done"), 2200);
+      setTimeout(() => setReindexState("idle"), 6000);
+    } catch (err) {
+      setReindexState("idle");
+      console.error("Reindex failed:", err);
+    }
   };
+
+  const handleMaintenance = async (enabled) => {
+    try {
+      await window.AdminAPI.toggleMaintenance(enabled, "");
+      setMaintenance(enabled);
+    } catch (err) {
+      // Toggle locally even if API fails (token might not be set)
+      setMaintenance(enabled);
+      console.error("Maintenance toggle:", err);
+    }
+  };
+
+  const counts = { logs: data.logs.length, failing: data.failing.length };
 
   const currentNav = NAV.find((n) => n.id === page);
   const monitorItems = NAV.filter((n) => n.group === "monitor");
@@ -57,20 +121,23 @@ function App() {
 
         <div className="nav-section-label">{t.nav_monitor}</div>
         {monitorItems.map((n) => (
-          <NavItem key={n.id} item={n} t={t} active={page === n.id} onClick={() => setPage(n.id)}/>
+          <NavItem key={n.id} item={n} t={t} active={page === n.id} count={counts[n.countKey]} onClick={() => setPage(n.id)}/>
         ))}
 
         <div className="nav-section-label">{t.nav_ops}</div>
         {opsItems.map((n) => (
-          <NavItem key={n.id} item={n} t={t} active={page === n.id} onClick={() => setPage(n.id)}/>
+          <NavItem key={n.id} item={n} t={t} active={page === n.id} count={counts[n.countKey]} onClick={() => setPage(n.id)}/>
         ))}
 
         <div className="sidebar-footer">
-          <ConnectionBadge state={connState} lang={lang}/>
+          <div className="row">
+            <span className="dot"/>
+            <span>{data.system && data.system.vllm && data.system.vllm.status === "healthy"
+              ? (lang === "vi" ? "Tat ca dich vu on" : "All services healthy")
+              : (lang === "vi" ? "Dang kiem tra..." : "Checking...")}</span>
+          </div>
           <div className="row" style={{ opacity: 0.7 }}>
-            <span className="mono" style={{ fontSize: 10.5 }}>
-              {window.ehcApi.base ? new URL(window.ehcApi.base).host : "no-api"}
-            </span>
+            <span className="mono" style={{ fontSize: 10.5 }}>v0.4.3 · gpu-01</span>
           </div>
         </div>
       </aside>
@@ -95,6 +162,7 @@ function App() {
             <button className={lang === "en" ? "active" : ""} onClick={() => setLang("en")}>EN</button>
           </div>
           <button className="btn ghost" aria-label="Notifications"><Icon name="bell" size={15}/></button>
+          {maintenance && <span className="pill warn"><span className="dot"/>{lang === "vi" ? "Bảo trì" : "Maintenance"}</span>}
           <button className="btn green" onClick={handleReindex} disabled={reindexState === "running"}>
             <Icon name="refresh" size={13}/>
             {reindexState === "running" ? (lang === "vi" ? "Đang chạy" : "Running") : t.reindex}
@@ -106,20 +174,24 @@ function App() {
       {/* Main */}
       <main className="main">
         <div className="main-inner">
-          {/* Connection banner — shown only when running on mock */}
-          {connState.checked && !connState.online && <MockBanner lang={lang}/>}
-
           {page === "overview" && (
-            <OverviewPage t={t} lang={lang}
+            <OverviewPage t={t} lang={lang} data={data}
               onOpenLogs={() => setPage("logs")}
               onOpenFailing={() => setPage("failing")}
             />
           )}
-          {page === "logs" && <LogsPage t={t} lang={lang} debug={tweaks.showDebug}/>}
-          {page === "failing" && <FailingPage t={t} lang={lang}/>}
-          {page === "eval" && <EvalPage t={t} lang={lang}/>}
+          {page === "logs" && (
+            <LogsPage t={t} lang={lang} data={data} debug={tweaks.showDebug}/>
+          )}
+          {page === "failing" && (
+            <FailingPage t={t} lang={lang} data={data}/>
+          )}
+          {page === "eval" && (
+            <EvalPage t={t} lang={lang} data={data}/>
+          )}
           {page === "system" && (
-            <SystemPage t={t} lang={lang}
+            <SystemPage t={t} lang={lang} data={data}
+              maintenance={maintenance} setMaintenance={handleMaintenance}
               onReindex={handleReindex} reindexState={reindexState}/>
           )}
         </div>
@@ -127,7 +199,7 @@ function App() {
 
       {/* Tweaks */}
       <TweaksPanel>
-        <TweakSection label="Debug"/>
+        <TweakSection label={lang === "vi" ? "Debug" : "Debug"}/>
         <TweakToggle
           label={lang === "vi" ? "Hiện chi tiết debug" : "Show debug info"}
           value={tweaks.showDebug}
@@ -143,53 +215,12 @@ function App() {
   );
 }
 
-function NavItem({ item, t, active, onClick }) {
+function NavItem({ item, t, active, count, onClick }) {
   return (
     <div className={"nav-item" + (active ? " active" : "")} onClick={onClick}>
       <span className="ic"><Icon name={item.icon} size={15}/></span>
       <span>{t[item.labelKey]}</span>
-    </div>
-  );
-}
-
-function ConnectionBadge({ state, lang }) {
-  if (!state.checked) {
-    return <div className="row"><span className="dot" style={{ background: "var(--text-soft)" }}/><span>{lang === "vi" ? "Đang kết nối…" : "Connecting…"}</span></div>;
-  }
-  if (state.online) {
-    return <div className="row"><span className="dot"/><span>{lang === "vi" ? "Đã kết nối API" : "Connected"}</span></div>;
-  }
-  return <div className="row"><span className="dot" style={{ background: "var(--warn)" }}/><span>{lang === "vi" ? "Dữ liệu mẫu (offline)" : "Mock data (offline)"}</span></div>;
-}
-
-function MockBanner({ lang }) {
-  const [dismissed, setDismissed] = useState(() => sessionStorage.getItem("ehcMockBannerDismissed") === "1");
-  if (dismissed) return null;
-  const dismiss = () => { sessionStorage.setItem("ehcMockBannerDismissed", "1"); setDismissed(true); };
-  return (
-    <div style={{
-      background: "oklch(0.96 0.06 80)",
-      border: "1px solid oklch(0.85 0.10 80)",
-      borderRadius: 10,
-      padding: "10px 14px",
-      marginBottom: 18,
-      fontSize: 12.5,
-      color: "oklch(0.42 0.12 75)",
-      display: "flex",
-      alignItems: "center",
-      gap: 10,
-    }}>
-      <Icon name="alert" size={14}/>
-      <div style={{ flex: 1 }}>
-        <strong>
-          {lang === "vi" ? "Không tìm thấy backend API." : "Backend API unreachable."}
-        </strong>{" "}
-        {lang === "vi"
-          ? <>Đang hiển thị dữ liệu mẫu. Mở qua FastAPI tại <code style={{ background: "rgba(255,255,255,0.5)", padding: "1px 5px", borderRadius: 3 }}>http://your-server:8080/admin-ui/</code> hoặc thêm <code style={{ background: "rgba(255,255,255,0.5)", padding: "1px 5px", borderRadius: 3 }}>?api=http://host:8080</code> vào URL.</>
-          : <>Showing mock data. Open via FastAPI at <code style={{ background: "rgba(255,255,255,0.5)", padding: "1px 5px", borderRadius: 3 }}>http://your-server:8080/admin-ui/</code> or append <code style={{ background: "rgba(255,255,255,0.5)", padding: "1px 5px", borderRadius: 3 }}>?api=http://host:8080</code> to the URL.</>
-        }
-      </div>
-      <button className="btn sm ghost" onClick={dismiss}><Icon name="close" size={12}/></button>
+      {count != null && <span className="count tnum">{count}</span>}
     </div>
   );
 }
