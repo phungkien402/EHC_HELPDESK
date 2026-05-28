@@ -4,14 +4,17 @@ _Branch: LOCAL_ASSISTANT_
 
 ## Goal
 
-Add 3 new read-only endpoints to `api/routes.py` so the admin console
-at `/admin/` can display real data instead of mock data.
+Add 3 new read-only endpoints so the admin console can display real data.
 
 ```
 GET /admin/stats/queries    ← aggregated query metrics + log table
 GET /admin/stats/health     ← service health (vLLM, Qdrant, FastAPI)
 GET /admin/stats/resources  ← CPU / RAM / Disk / GPU
 ```
+
+**Where to add:** `api/admin.py` — that router already owns the `/admin/` prefix
+and is included in `routes.py` via `app.include_router(admin_router)`.
+Do NOT add to `routes.py` directly.
 
 Also add `latency_ms` field to `QueryLog` and measure it in `handle_webhook`.
 
@@ -28,6 +31,7 @@ Also add `latency_ms` field to `QueryLog` and measure it in `handle_webhook`.
 Read these files in full before making any changes:
 
 - `api/routes.py`
+- `api/admin.py`
 - `api/logger.py`
 
 ---
@@ -359,7 +363,7 @@ async def stats_resources():
 ### Syntax check
 
 ```bash
-/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK && python3 -m py_compile api/routes.py api/logger.py && echo OK"
+/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK && python3 -m py_compile api/routes.py api/admin.py api/logger.py && echo OK"
 ```
 
 ### Test endpoints
@@ -382,5 +386,5 @@ sudo journalctl -u ehc-helpdesk -n 20 --no-pager
 ## Git
 
 ```bash
-/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK && git add api/routes.py api/logger.py requirements.txt && git commit -m 'feat: admin stats endpoints — queries, health, resources' && git push origin LOCAL_ASSISTANT"
+/bin/bash -c "export PATH=/home/phungkien/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && cd /home/phungkien/EHC_HELPDESK && git add api/admin.py api/logger.py requirements.txt && git commit -m 'feat: admin stats endpoints — queries, health, resources' && git push origin LOCAL_ASSISTANT"
 ```

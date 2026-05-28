@@ -19,13 +19,14 @@ POST /admin/eval/run                  Trigger eval in background, writes results
 GET  /admin/system/status             Health of Qdrant + vLLM + FastAPI + Redmine + last reindex
 """
 
+import asyncio
 import json
 import os
 import re
 import time
 import unicodedata
-from collections import defaultdict
-from datetime import datetime
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -495,3 +496,203 @@ def _cache_sizes() -> dict:
         }
     except Exception:
         return {}
+
+
+# ---------------------------------------------------------------------------
+# GET /admin/stats/queries
+# ---------------------------------------------------------------------------
+@router.get("/stats/queries")
+async def stats_queries(days: int = Query(7, ge=1, le=90)):
+    """
+    Aggregated query metrics from logs/queries.jsonl.
+
+    Returns total counts, fallback rate, avg confidence/latency,
+    per-day breakdown, per-platform breakdown, top unanswered questions,
+    and the most recent log entries.
+    """
+    log_path = Path(__file__).parent.parent / "logs" / "queries.jsonl"
+    unanswered_path = Path(__file__).parent.parent / "data" / "unanswered.jsonl"
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+
+    logs: list[dict] = []
+    if log_path.exists():
+        with open(log_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    if entry.get("timestamp", 0) >= cutoff:
+                        logs.append(entry)
+                except Exception:
+                    continue
+
+    total = len(logs)
+    fallbacks = sum(1 for l in logs if l.get("is_fallback", False))
+    fallback_rate = round(fallbacks / total, 4) if total else 0.0
+
+    conf_values = [
+        l["confidence"] for l in logs
+        if not l.get("is_fallback") and "confidence" in l
+    ]
+    avg_confidence = round(sum(conf_values) / len(conf_values), 4) if conf_values else 0.0
+
+    lat_values = [l.get("latency_s", 0) for l in logs if l.get("latency_s", 0) > 0]
+    avg_latency_ms = round((sum(lat_values) / len(lat_values)) * 1000, 1) if lat_values else 0.0
+
+    # by_day
+    day_counts: dict = defaultdict(lambda: {"count": 0, "fallbacks": 0})
+    for l in logs:
+        day = datetime.fromtimestamp(l["timestamp"], tz=timezone.utc).date().isoformat()
+        day_counts[day]["count"] += 1
+        if l.get("is_fallback"):
+            day_counts[day]["fallbacks"] += 1
+    by_day = [{"date": d, **v} for d, v in sorted(day_counts.items())]
+
+    # by_platform
+    platform_counts: Counter = Counter(l.get("platform", "unknown") for l in logs)
+    by_platform = dict(platform_counts)
+
+    # top_unanswered from data/unanswered.jsonl
+    top_unanswered: list[dict] = []
+    if unanswered_path.exists():
+        unanswered_raw: list[dict] = []
+        with open(unanswered_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    unanswered_raw.append(json.loads(line))
+                except Exception:
+                    continue
+        # Group by question text, count occurrences
+        q_groups: dict = defaultdict(lambda: {"count": 0, "last_seen": 0.0})
+        for entry in unanswered_raw:
+            q = entry.get("question", "").strip()
+            if not q:
+                continue
+            q_groups[q]["count"] += 1
+            ts = entry.get("timestamp", 0.0)
+            if ts > q_groups[q]["last_seen"]:
+                q_groups[q]["last_seen"] = ts
+        top_unanswered = sorted(
+            [
+                {
+                    "question": q,
+                    "count": v["count"],
+                    "last_seen": datetime.fromtimestamp(
+                        v["last_seen"], tz=timezone.utc
+                    ).date().isoformat() if v["last_seen"] else "",
+                }
+                for q, v in q_groups.items()
+            ],
+            key=lambda x: -x["count"],
+        )[:10]
+
+    # recent_logs — last 50, newest first, include id for table key
+    recent = list(reversed(logs[-50:]))
+    for i, entry in enumerate(recent):
+        entry["id"] = 9000 - i  # stable synthetic id for React key
+
+    return {
+        "total_queries": total,
+        "total_fallbacks": fallbacks,
+        "fallback_rate": fallback_rate,
+        "avg_confidence": avg_confidence,
+        "avg_latency_ms": avg_latency_ms,
+        "by_day": by_day,
+        "by_platform": by_platform,
+        "top_unanswered": top_unanswered,
+        "recent_logs": recent,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /admin/stats/health
+# ---------------------------------------------------------------------------
+@router.get("/stats/health")
+async def stats_health():
+    """
+    Check all service dependencies. Responds in < 2 seconds.
+
+    Each status: "ok" | "error" | "timeout"
+    """
+
+    async def check(name: str, url: str, timeout: float = 1.5) -> tuple[str, str]:
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(url)
+                if resp.status_code < 500:
+                    return name, "ok"
+                return name, "error"
+        except httpx.TimeoutException:
+            return name, "timeout"
+        except Exception:
+            return name, "error"
+
+    results = await asyncio.gather(
+        check("qdrant", "http://localhost:6333/healthz"),
+        check("vllm", "http://localhost:8000/health"),
+        return_exceptions=True,
+    )
+
+    health: dict[str, str] = {"fastapi": "ok"}
+    for r in results:
+        if isinstance(r, tuple):
+            health[r[0]] = r[1]
+
+    health["timestamp"] = time.time()
+    return health
+
+
+# ---------------------------------------------------------------------------
+# GET /admin/stats/resources
+# ---------------------------------------------------------------------------
+@router.get("/stats/resources")
+async def stats_resources():
+    """
+    System resource snapshot: CPU, RAM, disk, and GPU (if available).
+    """
+    import psutil
+
+    cpu = psutil.cpu_percent(interval=0.5)
+    vm = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+
+    gpu_list: list[dict] = []
+    try:
+        import pynvml
+
+        pynvml.nvmlInit()
+        count = pynvml.nvmlDeviceGetCount()
+        for i in range(count):
+            h = pynvml.nvmlDeviceGetHandleByIndex(i)
+            name = pynvml.nvmlDeviceGetName(h)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(h)
+            temp = pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU)
+            util = pynvml.nvmlDeviceGetUtilizationRates(h)
+            gpu_list.append({
+                "index": i,
+                "name": name if isinstance(name, str) else name.decode(),
+                "vram_used_mb": mem.used // (1024 * 1024),
+                "vram_total_mb": mem.total // (1024 * 1024),
+                "vram_percent": round(mem.used / mem.total * 100, 1),
+                "temperature_c": temp,
+                "utilization_percent": util.gpu,
+            })
+    except Exception:
+        pass  # No GPU drivers, or pynvml not installed
+
+    return {
+        "cpu_percent": cpu,
+        "ram_used_gb": round(vm.used / 1e9, 1),
+        "ram_total_gb": round(vm.total / 1e9, 1),
+        "ram_percent": vm.percent,
+        "disk_used_gb": round(disk.used / 1e9, 1),
+        "disk_total_gb": round(disk.total / 1e9, 1),
+        "disk_percent": round(disk.used / disk.total * 100, 1),
+        "gpu": gpu_list,
+    }
