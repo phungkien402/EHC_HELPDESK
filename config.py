@@ -43,6 +43,11 @@ VLLM_MODEL = _get("VLLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
 EMBED_MODEL = _get("EMBED_MODEL", "BAAI/bge-m3")
 RERANKER_MODEL = _get("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 
+# Device assignments for in-process models
+# GPU0: embedding + reranker  |  GPU1: vLLM generator (separate process)
+EMBED_DEVICE = _get("EMBED_DEVICE", "cuda:0")
+RERANKER_DEVICE = _get("RERANKER_DEVICE", "cuda:0")
+
 # --- Qdrant ---
 QDRANT_URL = _get("QDRANT_URL", "http://localhost:6333")
 QDRANT_COLLECTION = _get("QDRANT_COLLECTION", "ehc_faq")
@@ -51,6 +56,13 @@ QDRANT_COLLECTION = _get("QDRANT_COLLECTION", "ehc_faq")
 RETRIEVER_TOP_K = int(_get("RETRIEVER_TOP_K", "10"))
 RERANKER_TOP_N = int(_get("RERANKER_TOP_N", "3"))
 CONFIDENCE_THRESHOLD = float(_get("CONFIDENCE_THRESHOLD", "0.4"))
+
+# Adaptive shortcut: skip rewrite + full retrieve when fast retrieval is confident
+SHORTCUT_SCORE_THRESHOLD = float(_get("SHORTCUT_SCORE_THRESHOLD", "0.85"))
+
+# Retrieval override: if guard says NO but top1 RRF score exceeds this,
+# trust the retriever and proceed with the pipeline
+RETRIEVAL_OVERRIDE_THRESHOLD = float(_get("RETRIEVAL_OVERRIDE_THRESHOLD", "0.015"))
 
 # --- Session ---
 SESSION_MAX_TURNS = int(_get("SESSION_MAX_TURNS", "10"))

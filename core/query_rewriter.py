@@ -24,31 +24,62 @@ _client = OpenAI(base_url=f"{VLLM_BASE_URL}/v1", api_key="not-needed")
 
 SYSTEM_PROMPT = (
     "You are a query understanding assistant for EHC electronic medical record software support. "
-    "Your job is to read a user's message and extract the core technical problem they are experiencing, "
-    "expressed as a short, clear issue statement that matches how FAQ entries are written.\n\n"
+    "Your job is to read a user's message and rewrite it as a clear, searchable issue statement "
+    "that matches how FAQ entries are written.\n\n"
     "Rules:\n"
-    "1. Focus on WHAT the problem is, not HOW the user described it.\n"
-    "2. Output a short statement (1 sentence), not a question.\n"
-    "3. Use technical terms that would appear in a FAQ title.\n"
-    "4. If the message is already a clear technical question, keep it as-is.\n"
-    "5. Output in Vietnamese. Return only the rewritten query — no explanation.\n"
-    "6. Prefix selection:\n"
-    "   - Use \"Lỗi...\" ONLY when the input describes a system error, crash, malfunction, or "
-    "unexpected behavior (e.g. \"bị lỗi\", \"không lên\", \"xoay hoài\", \"bắt update\").\n"
-    "   - Use \"Cách...\" when the input is a how-to or navigation question "
-    "(e.g. \"bấm vào đâu\", \"làm sao\", \"ở đâu\", \"muốn làm\").\n"
-    "   - Use \"Vị trí...\" when asking where something is located in the UI."
+    "1. PRESERVE symptom/action signal words — keep 'sai', 'lỗi', 'không được', 'bị', "
+    "'trắng xóa', 'không lên', 'không tìm thấy' etc. These are critical for retrieval.\n"
+    "2. GENERALIZE specific instance names to their category — FAQ entries are written "
+    "generically, so strip the specific name and keep the category:\n"
+    "   - Specific service names (nội soi trực tràng, siêu âm bụng, X-quang ngực...) → 'dịch vụ'\n"
+    "   - Specific drug names (amoxicillin, paracetamol...) → 'thuốc'\n"
+    "   - Specific patient names or codes → 'bệnh nhân'\n"
+    "3. Output a short statement (1 sentence), not a question.\n"
+    "4. Add the correct prefix:\n"
+    "   - 'Lỗi...' when the input describes an error, crash, or unexpected behavior.\n"
+    "   - 'Cách...' when the input is a how-to or navigation question.\n"
+    "   - 'Vị trí...' when asking where something is in the UI.\n"
+    "5. Output in Vietnamese. Return only the rewritten query — no explanation.\n\n"
+    "BAD:\n"
+    "  'nội soi trực tràng bị sai giá BHYT' → 'Cách sửa giá dịch vụ nội soi trực tràng bị sai BHYT'  ← keeps specific name\n"
+    "  'dịch vụ bị sai giá'                 → 'thay đổi giá dịch vụ'  ← loses 'sai'\n"
+    "  'không in được'                       → 'in phiếu'              ← loses 'không được'\n\n"
+    "GOOD:\n"
+    "  'nội soi trực tràng bị sai giá BHYT' → 'Cách sửa giá dịch vụ bị sai BHYT'\n"
+    "  'siêu âm bụng tính giá sai'          → 'Cách sửa giá dịch vụ bị sai'\n"
+    "  'thuốc amoxicillin hết kho'          → 'Cách xử lý khi thuốc hết tồn kho'\n"
+    "  'dịch vụ bị sai giá'                 → 'Cách sửa giá dịch vụ bị sai'\n"
+    "  'không in được vỏ bệnh án'           → 'Lỗi không in được vỏ bệnh án'\n"
+    "  'xử trí cứ xoay hoài không dừng'     → 'Lỗi màn hình xoay mãi khi xử trí bệnh nhân'\n"
+    "  'in giấy ra viện lại ở đâu'          → 'Vị trí in lại giấy ra viện trong hệ thống'\n"
+    "  'BN ra viện rồi muốn sửa thông tin'  → 'Cách sửa thông tin bệnh nhân sau khi ra viện'\n"
 )
 
 FEW_SHOT_EXAMPLES = [
-    ("merge patient records how?", "Cách gộp mã bệnh nhân"),
-    ("xử trí cứ xoay hoài không dừng", "Lỗi màn hình xoay mãi khi xử trí bệnh nhân"),
-    ("phần mềm bắt update mới vô được", "Lỗi phần mềm bắt buộc cập nhật mới đăng nhập được"),
-    ("in phiếu không lên form view làm sao", "Lỗi in phiếu không hiển thị form view"),
-    ("in giấy ra viện lại ở đâu", "Vị trí in lại giấy ra viện trong hệ thống"),
-    ("xem giúp tôi hẹn bệnh nhân nhưng hệ thống tự nhảy vào thứ 7 chủ nhật", "Lỗi module đặt hẹn tự chọn sai ngày trong tuần"),
-    ("BN ra viện rồi muốn sửa thông tin", "Cách sửa thông tin bệnh nhân sau khi đã xử trí ra viện"),
-    ("muốn hủy nhập viện thì bấm vào đâu", "Cách hủy nhập viện trong hệ thống EHC"),
+    # Error cases — preserve "lỗi/không/bị" signal
+    ("xử trí cứ xoay hoài không dừng",
+     "Lỗi màn hình xoay mãi khi xử trí bệnh nhân"),
+    ("phần mềm bắt update mới vô được",
+     "Lỗi phần mềm bắt buộc cập nhật mới đăng nhập được"),
+    ("in phiếu không lên form view làm sao",
+     "Lỗi in phiếu không hiển thị form view"),
+    ("dịch vụ bị sai giá",
+     "Cách sửa giá dịch vụ bị sai trong EHC"),
+    ("không in được vỏ bệnh án",
+     "Lỗi không in được vỏ bệnh án trong EHC"),
+    ("quét thẻ BHYT báo không tìm thấy bệnh nhân",
+     "Lỗi quét thẻ bảo hiểm y tế không tìm thấy bệnh nhân"),
+    # How-to cases — add clarifying context, keep domain wording
+    ("in giấy ra viện lại ở đâu",
+     "Vị trí in lại giấy ra viện trong hệ thống"),
+    ("muốn hủy nhập viện thì bấm vào đâu",
+     "Cách hủy nhập viện trong hệ thống EHC"),
+    ("BN ra viện rồi muốn sửa thông tin",
+     "Cách sửa thông tin bệnh nhân sau khi đã ra viện"),
+    ("merge patient records how?",
+     "Cách gộp mã bệnh nhân"),
+    ("thuốc hết tồn kho làm sao",
+     "Cách xử lý khi thuốc hết tồn kho trong kho dược"),
 ]
 
 
@@ -189,19 +220,43 @@ def rewrite(text: str) -> str:
 
 
 ANALYZE_AND_REWRITE_PROMPT = (
-    "Bạn là trợ lý EHC. Dựa vào tài liệu tham khảo (nếu có), hãy thực hiện 2 việc:\n"
+    "Bạn là trợ lý EHC. Dựa vào tài liệu tham khảo (nếu có), hãy thực hiện 3 việc:\n"
     "1. Mô tả ngắn gọn vấn đề người dùng đang gặp (1 câu, ngôi thứ 3)\n"
     "2. Viết lại câu hỏi thành query tìm kiếm ngắn gọn, formal tiếng Việt\n"
-    "Trả về đúng 2 dòng theo format:\n"
+    "3. Đánh giá xem câu hỏi có đủ thông tin để trả lời không\n\n"
+    "Trả về đúng 3 dòng:\n"
     "INTENT: <mô tả vấn đề>\n"
-    "QUERY: <query tìm kiếm>"
+    "QUERY: <query tìm kiếm>\n"
+    "ANSWERABLE: <yes | no | unclear>\n\n"
+    "Hướng dẫn viết QUERY — áp dụng 2 rule:\n"
+    "Rule 1 — GIỮ từ chỉ triệu chứng/lỗi: 'sai', 'lỗi', 'không được', 'bị', "
+    "'trắng xóa', 'không lên', 'không tìm thấy', 'xoay hoài' v.v.\n"
+    "Rule 2 — TỔNG QUÁT HÓA tên thực thể cụ thể về category (vì FAQ viết generic):\n"
+    "  + Tên dịch vụ cụ thể (nội soi trực tràng, siêu âm bụng...) → 'dịch vụ'\n"
+    "  + Tên thuốc cụ thể (amoxicillin, paracetamol...) → 'thuốc'\n"
+    "  + Tên/mã bệnh nhân cụ thể → 'bệnh nhân'\n\n"
+    "Ví dụ đúng:\n"
+    "  'nội soi trực tràng bị sai giá BHYT' → 'Cách sửa giá dịch vụ bị sai BHYT'\n"
+    "  'dịch vụ bị sai giá'                 → 'Cách sửa giá dịch vụ bị sai'\n"
+    "Ví dụ sai:\n"
+    "  'nội soi trực tràng bị sai giá BHYT' → 'Cách sửa giá dịch vụ nội soi trực tràng bị sai BHYT' (giữ tên cụ thể)\n"
+    "  'dịch vụ bị sai giá'                 → 'thay đổi giá dịch vụ' (mất chữ 'sai')\n\n"
+    "Thêm prefix: 'Lỗi...' cho lỗi/sự cố, 'Cách...' cho how-to.\n\n"
+    "Hướng dẫn ANSWERABLE:\n"
+    "- yes: câu hỏi đủ thông tin, có thể tìm kiếm và trả lời\n"
+    "- unclear: quá mơ hồ — không biết module nào, lỗi gì, thao tác nào. "
+    "Ví dụ: 'mình không in được', 'bị lỗi rồi', 'không vào được'\n"
+    "- no: hoàn toàn không liên quan\n\n"
+    "Nếu lịch sử hội thoại đã làm rõ → ANSWERABLE=yes dù câu hiện tại ngắn.\n"
+    "Nếu không có tài liệu nhưng câu hỏi rõ ràng → ANSWERABLE=yes."
 )
 
 
-def _parse_intent_and_query(response_text: str, original_query: str) -> tuple[str | None, str]:
-    """Parse the INTENT:/QUERY: response format. Returns (intent, rewritten_query)."""
+def _parse_analyze_response(response_text: str, original_query: str) -> tuple[str | None, str, str]:
+    """Parse INTENT/QUERY/ANSWERABLE response. Returns (intent, rewritten_query, answerable)."""
     intent = None
     rewritten = original_query
+    answerable = "unclear"  # safe default
 
     for line in response_text.strip().splitlines():
         line = line.strip()
@@ -209,24 +264,41 @@ def _parse_intent_and_query(response_text: str, original_query: str) -> tuple[st
             intent = line[len("INTENT:"):].strip()
         elif line.upper().startswith("QUERY:"):
             rewritten = line[len("QUERY:"):].strip()
+        elif line.upper().startswith("ANSWERABLE:"):
+            val = line[len("ANSWERABLE:"):].strip().lower()
+            if val in ("yes", "no", "unclear"):
+                answerable = val
 
-    # If rewritten is empty after parsing, fall back to original
     if not rewritten:
         rewritten = original_query
 
-    return intent, rewritten
+    return intent, rewritten, answerable
 
 
-def analyze_and_rewrite(query: str, chunks: list = None) -> tuple[str | None, str]:
+def analyze_and_rewrite(query: str, chunks: list = None, session_history: list = None) -> tuple[str | None, str, str]:
     """
-    Combined intent analysis + query rewrite in a single vLLM call.
-    Returns (intent, rewritten_query).
+    Combined intent analysis + query rewrite + answerability check in a single vLLM call.
+    Returns (intent, rewritten_query, answerable).
 
+    answerable is one of: "yes", "no", "unclear"
     If chunks are provided, injects them as context for grounded analysis.
-    Graceful degradation: returns (None, original_query) if vLLM is unavailable.
+    If session_history is provided, injects recent turns so LLM can resolve
+    short follow-up replies (e.g. "2", "cái đó", "vậy thì...") in context.
+    Graceful degradation: returns (None, original_query, "unclear") if vLLM is unavailable.
     """
     query = expand_abbreviations(query)
     print(f"[ANALYZE+REWRITE] Query: \"{query}\"")
+
+    # Build history block from recent conversation turns (last 2 exchanges = 4 messages)
+    history_block = ""
+    if session_history:
+        recent = session_history[-4:]
+        lines = []
+        for turn in recent:
+            role = "Người dùng" if turn["role"] == "user" else "Trợ lý"
+            lines.append(f"{role}: {turn['text']}")
+        history_block = "Lịch sử hội thoại:\n" + "\n".join(lines) + "\n\n"
+        print(f"[ANALYZE+REWRITE] Injecting {len(recent)} history turns")
 
     # Build user content with optional chunk context
     if chunks:
@@ -237,10 +309,10 @@ def analyze_and_rewrite(query: str, chunks: list = None) -> tuple[str | None, st
             text = c.text or c.metadata.get("description", "")
             chunk_texts.append(f"{i}. {subject}: {text}")
         context_block = "\n".join(chunk_texts)
-        user_content = f"Tài liệu tham khảo:\n{context_block}\n\nCâu hỏi: {query}"
+        user_content = f"{history_block}Tài liệu tham khảo:\n{context_block}\n\nCâu hỏi: {query}"
     else:
         print(f"[ANALYZE+REWRITE] No chunks (blind mode)")
-        user_content = f"Câu hỏi: {query}"
+        user_content = f"{history_block}Câu hỏi: {query}"
 
     messages = [
         {"role": "system", "content": ANALYZE_AND_REWRITE_PROMPT},
@@ -256,13 +328,13 @@ def analyze_and_rewrite(query: str, chunks: list = None) -> tuple[str | None, st
         )
 
         raw = response.choices[0].message.content.strip()
-        intent, rewritten = _parse_intent_and_query(raw, query)
+        intent, rewritten, answerable = _parse_analyze_response(raw, query)
         print(f"[ANALYZE+REWRITE] Intent: \"{intent}\"")
         print(f"[ANALYZE+REWRITE] Rewritten: \"{rewritten}\"")
-        return intent, rewritten
+        print(f"[ANALYZE+REWRITE] Answerable: \"{answerable}\"")
+        return intent, rewritten, answerable
 
     except APIConnectionError:
-        # Retry once after 1s — vLLM may be busy
         print(f"[ANALYZE+REWRITE] Connection error, retrying in 1s...")
         time.sleep(1)
         try:
@@ -273,10 +345,11 @@ def analyze_and_rewrite(query: str, chunks: list = None) -> tuple[str | None, st
                 temperature=0.1,
             )
             raw = response.choices[0].message.content.strip()
-            intent, rewritten = _parse_intent_and_query(raw, query)
+            intent, rewritten, answerable = _parse_analyze_response(raw, query)
             print(f"[ANALYZE+REWRITE] Intent (retry): \"{intent}\"")
             print(f"[ANALYZE+REWRITE] Rewritten (retry): \"{rewritten}\"")
-            return intent, rewritten
+            print(f"[ANALYZE+REWRITE] Answerable (retry): \"{answerable}\"")
+            return intent, rewritten, answerable
         except Exception as retry_e:
             print(f"[ANALYZE+REWRITE] Retry failed ({type(retry_e).__name__}), raising LLMUnavailableError")
             raise LLMUnavailableError(str(retry_e)) from retry_e

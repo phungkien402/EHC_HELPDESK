@@ -16,12 +16,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from FlagEmbedding import FlagReranker
 
-from config import RERANKER_MODEL, RERANKER_TOP_N, CONFIDENCE_THRESHOLD
+from config import RERANKER_MODEL, RERANKER_TOP_N, CONFIDENCE_THRESHOLD, RERANKER_DEVICE
 from core.models import RetrievedChunk
 
 # Module-level singleton — loaded once when module is first imported
-print(f"[RERANKER] Loading model: {RERANKER_MODEL}")
-_reranker = FlagReranker(RERANKER_MODEL, use_fp16=False, device='cpu')
+print(f"[RERANKER] Loading {RERANKER_MODEL} on {RERANKER_DEVICE} ...")
+_reranker = FlagReranker(RERANKER_MODEL, use_fp16=True, device=RERANKER_DEVICE)
+print(f"[RERANKER] Model ready.")
 
 
 def rerank(query: str, chunks: list[RetrievedChunk], top_n: int = None) -> list[RetrievedChunk]:

@@ -17,15 +17,18 @@ Run standalone: python -m core.pipeline
 import sys
 import time
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from config import RETRIEVER_TOP_K, RERANKER_TOP_N, CONFIDENCE_THRESHOLD, MAINTENANCE_MODE
+from config import RETRIEVER_TOP_K, RERANKER_TOP_N, CONFIDENCE_THRESHOLD, MAINTENANCE_MODE, SHORTCUT_SCORE_THRESHOLD, RETRIEVAL_OVERRIDE_THRESHOLD
 from core.models import Message, Answer
 from core import query_rewriter, retriever, reranker, generator, confidence, fallback
 from core.query_rewriter import analyze_and_rewrite
 from core.generator import GeneratorError, LLMUnavailableError
 from core.intent_guard import classify, chat_fallback
+from core.generator import _client as _llm_client
+from core.cache import rewrite_cache, retrieval_cache, answer_cache
 
 # --- Maintenance mode (toggled at runtime via /admin/maintenance) ---
 _maintenance_mode: bool = MAINTENANCE_MODE
@@ -46,6 +49,40 @@ def set_maintenance_mode(enabled: bool):
 def is_maintenance_mode() -> bool:
     """Check if maintenance mode is active."""
     return _maintenance_mode
+
+
+def _build_clarify_message(query: str, intent: str | None) -> str:
+    """
+    Build a clarify message asking for more details.
+    Uses a simple LLM call to generate a natural follow-up question.
+    Falls back to a generic message if vLLM is unavailable.
+    """
+    from config import VLLM_MODEL
+
+    _CLARIFY_PROMPT = (
+        "Bạn là trợ lý hỗ trợ phần mềm EHC. Người dùng gửi tin nhắn mơ hồ.\n"
+        "Hãy hỏi ngắn gọn (tối đa 2 câu) để làm rõ vấn đề.\n"
+        "Chỉ hỏi dựa trên những gì user đã nói — KHÔNG giả định module cụ thể.\n"
+        "Hỏi cụ thể: lỗi gì? module nào? thao tác nào? thấy thông báo gì?"
+    )
+    _DEFAULT = "Bạn đang gặp vấn đề cụ thể nào? Thấy thông báo lỗi gì không?"
+
+    try:
+        resp = _llm_client.chat.completions.create(
+            model=VLLM_MODEL,
+            messages=[
+                {"role": "system", "content": _CLARIFY_PROMPT},
+                {"role": "user", "content": query},
+            ],
+            max_tokens=100,
+            temperature=0.3,
+        )
+        msg = resp.choices[0].message.content
+        if msg:
+            return msg.strip()
+    except Exception:
+        pass
+    return _DEFAULT
 
 
 def run(message: Message, session_history: list) -> Answer:
@@ -74,8 +111,31 @@ def run(message: Message, session_history: list) -> Answer:
     print(f"[PIPELINE] Input: \"{message.text}\"")
     print(f"{'='*60}")
 
-    # Guard: off-topic / small talk (LLM classifier)
-    if classify(message.text):
+    # ── Answer cache ──────────────────────────────────────────────────────────
+    _cached_answer = answer_cache.get(message.text)
+    if _cached_answer is not None:
+        print(f"[CACHE] Answer hit: \"{message.text}\"")
+        return _cached_answer
+
+    # Guard + Step 1: run intent classify and fast retrieve in parallel
+    print(f"\n[PIPELINE] Guard + Step 1: parallel classify + fast retrieve")
+    with ThreadPoolExecutor(max_workers=2) as _pool:
+        _f_classify = _pool.submit(classify, message.text)
+        _f_retrieve = _pool.submit(retriever.retrieve, message.text, 3)
+        _is_offtopic = _f_classify.result()
+        fast_chunks = _f_retrieve.result()
+
+    # Retrieval override: if retriever found a strong domain match, trust it over guard
+    if _is_offtopic and fast_chunks:
+        top_score = fast_chunks[0].score
+        if top_score >= RETRIEVAL_OVERRIDE_THRESHOLD:
+            print(
+                f"[PIPELINE] Guard override: classify=NO but top1_rrf={top_score:.4f} "
+                f">= {RETRIEVAL_OVERRIDE_THRESHOLD} — proceeding with pipeline"
+            )
+            _is_offtopic = False
+
+    if _is_offtopic:
         print(f"[PIPELINE] Off-topic detected: \"{message.text}\" → chat fallback")
         fallback_text = chat_fallback(message.text)
         return Answer(
@@ -86,31 +146,82 @@ def run(message: Message, session_history: list) -> Answer:
             rewritten_question=message.text,
         )
 
-    # Step 1: Fast retrieve — embed original query, get top 3 (no reranking)
-    print(f"\n[PIPELINE] Step 1: Fast retrieve (top 3)")
-    fast_chunks = retriever.retrieve(message.text, top_k=3)
-
-    # Step 2: Analyze intent + rewrite query in a single LLM call
-    print(f"\n[PIPELINE] Step 2: Analyze + Rewrite (single call)")
-    try:
-        if fast_chunks:
-            user_intent, rewritten = analyze_and_rewrite(message.text, chunks=fast_chunks)
-        else:
-            user_intent, rewritten = analyze_and_rewrite(message.text)
-    except LLMUnavailableError:
-        print("[PIPELINE] vLLM unavailable during analyze+rewrite → LLM unavailable response")
-        return Answer(
-            text="⚠️ Hệ thống AI đang bận hoặc đang khởi động lại, vui lòng thử lại sau 1–2 phút. Nếu vẫn lỗi, liên hệ bộ phận IT để kiểm tra server.",
-            confidence=0.0,
-            source_chunks=[],
-            is_fallback=True,
-            rewritten_question="",
+    # Adaptive shortcut: if top result is highly confident, skip rewrite + full retrieve
+    _shortcut = (
+        bool(fast_chunks)
+        and fast_chunks[0].score >= SHORTCUT_SCORE_THRESHOLD
+    )
+    if _shortcut:
+        print(
+            f"[PIPELINE] Shortcut: top1 score={fast_chunks[0].score:.4f} "
+            f">= {SHORTCUT_SCORE_THRESHOLD} — skipping rewrite + full retrieve"
         )
-    print(f"[PIPELINE] analyze_and_rewrite: intent=\"{user_intent}\" query=\"{rewritten}\"")
 
-    # Step 3: Full retrieve with rewritten query
-    print(f"\n[PIPELINE] Step 3: Full retrieve (top {RETRIEVER_TOP_K})")
-    chunks = retriever.retrieve(rewritten, top_k=RETRIEVER_TOP_K)
+    if not _shortcut:
+        # Step 2: Analyze intent + rewrite query + answerability check in a single LLM call
+        print(f"\n[PIPELINE] Step 2: Analyze + Rewrite (single call)")
+
+        # ── Rewrite cache ─────────────────────────────────────────────────────────
+        _cached_rewrite = rewrite_cache.get(message.text)
+        if _cached_rewrite is not None:
+            user_intent, rewritten, answerable = _cached_rewrite
+            print(f"[CACHE] Rewrite hit: \"{message.text}\" → \"{rewritten}\"")
+        else:
+            try:
+                if fast_chunks:
+                    user_intent, rewritten, answerable = analyze_and_rewrite(
+                        message.text, chunks=fast_chunks, session_history=session_history
+                    )
+                else:
+                    user_intent, rewritten, answerable = analyze_and_rewrite(
+                        message.text, session_history=session_history
+                    )
+            except LLMUnavailableError:
+                print("[PIPELINE] vLLM unavailable during analyze+rewrite → LLM unavailable response")
+                return Answer(
+                    text="⚠️ Hệ thống AI đang bận hoặc đang khởi động lại, vui lòng thử lại sau 1–2 phút. Nếu vẫn lỗi, liên hệ bộ phận IT để kiểm tra server.",
+                    confidence=0.0,
+                    source_chunks=[],
+                    is_fallback=True,
+                    rewritten_question="",
+                )
+            rewrite_cache.set(message.text, (user_intent, rewritten, answerable))
+            print(f"[CACHE] Rewrite miss → stored: \"{rewritten}\"")
+
+        print(f"[PIPELINE] analyze_and_rewrite: intent=\"{user_intent}\" query=\"{rewritten}\"")
+
+        # Step 2.5: Clarify if query is too vague
+        if answerable == "unclear":
+            print(f"[PIPELINE] Query too vague (answerable=unclear) → clarify")
+            clarify_text = _build_clarify_message(message.text, user_intent)
+            return Answer(
+                text=clarify_text,
+                confidence=0.0,
+                source_chunks=[],
+                is_fallback=True,
+                rewritten_question=rewritten,
+            )
+    else:
+        # Shortcut path: use original query, skip analysis
+        rewritten = message.text
+        answerable = "yes"
+        user_intent = None
+
+    if not _shortcut:
+        # Step 3: Full retrieve with rewritten query
+        print(f"\n[PIPELINE] Step 3: Full retrieve (top {RETRIEVER_TOP_K})")
+
+        # ── Retrieval cache ───────────────────────────────────────────────────────
+        chunks = retrieval_cache.get(rewritten)
+        if chunks is not None:
+            print(f"[CACHE] Retrieval hit: {len(chunks)} chunks")
+        else:
+            chunks = retriever.retrieve(rewritten, top_k=RETRIEVER_TOP_K)
+            retrieval_cache.set(rewritten, chunks)
+            print(f"[CACHE] Retrieval miss → stored {len(chunks)} chunks")
+    else:
+        # Shortcut path: use fast chunks directly
+        chunks = fast_chunks
 
     if not chunks:
         print("[PIPELINE] No chunks retrieved → fallback")
@@ -153,6 +264,9 @@ def run(message: Message, session_history: list) -> Answer:
         is_fallback=False,
         rewritten_question=rewritten,
     )
+
+    # ── Store in answer cache ─────────────────────────────────────────────────
+    answer_cache.set(message.text, answer)
 
     print(f"\n[PIPELINE] Done. confidence={answer.confidence:.4f} fallback={answer.is_fallback}")
     return answer
