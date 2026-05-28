@@ -43,6 +43,11 @@ VLLM_MODEL = _get("VLLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
 EMBED_MODEL = _get("EMBED_MODEL", "BAAI/bge-m3")
 RERANKER_MODEL = _get("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 
+# Device assignments for in-process models
+# GPU0: embedding + reranker  |  GPU1: vLLM generator (separate process)
+EMBED_DEVICE = _get("EMBED_DEVICE", "cuda:0")
+RERANKER_DEVICE = _get("RERANKER_DEVICE", "cuda:0")
+
 # --- Qdrant ---
 QDRANT_URL = _get("QDRANT_URL", "http://localhost:6333")
 QDRANT_COLLECTION = _get("QDRANT_COLLECTION", "ehc_faq")

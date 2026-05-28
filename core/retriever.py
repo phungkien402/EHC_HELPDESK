@@ -16,13 +16,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 
-from config import QDRANT_URL, QDRANT_COLLECTION, EMBED_MODEL, RETRIEVER_TOP_K
+from config import QDRANT_URL, QDRANT_COLLECTION, EMBED_MODEL, EMBED_DEVICE, RETRIEVER_TOP_K
 from core.models import RetrievedChunk
 from core.bm25_index import get_bm25_index
 
 # Module-level singletons — loaded once when module is first imported
-print(f"[RETRIEVER] Loading embedding model: {EMBED_MODEL}")
-_model = SentenceTransformer(EMBED_MODEL, device='cpu')
+print(f"[RETRIEVER] Loading {EMBED_MODEL} on {EMBED_DEVICE} ...")
+_model = SentenceTransformer(EMBED_MODEL, device=EMBED_DEVICE)
+print(f"[RETRIEVER] Embed model ready.")
 _client = QdrantClient(url=QDRANT_URL)
 
 

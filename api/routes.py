@@ -225,3 +225,28 @@ async def toggle_maintenance(request: Request):
         "maintenance_mode": is_maintenance_mode(),
         "message": f"Maintenance mode {'enabled' if enabled else 'disabled'}.",
     }
+
+
+@app.get("/admin/cache-stats")
+async def cache_stats(token: str = ""):
+    """Return cache sizes for monitoring."""
+    if ADMIN_TOKEN and token != ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from core.cache import rewrite_cache, retrieval_cache, answer_cache
+    return {
+        "rewrite": rewrite_cache.stats(),
+        "retrieval": retrieval_cache.stats(),
+        "answer": answer_cache.stats(),
+    }
+
+
+@app.post("/admin/cache-clear")
+async def cache_clear(token: str = ""):
+    """Clear all caches. Requires ADMIN_TOKEN."""
+    if ADMIN_TOKEN and token != ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from core.cache import rewrite_cache, retrieval_cache, answer_cache
+    rewrite_cache.clear()
+    retrieval_cache.clear()
+    answer_cache.clear()
+    return {"status": "cleared"}

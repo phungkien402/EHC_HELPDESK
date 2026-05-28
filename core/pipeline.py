@@ -28,6 +28,7 @@ from core.query_rewriter import analyze_and_rewrite
 from core.generator import GeneratorError, LLMUnavailableError
 from core.intent_guard import classify, chat_fallback
 from core.generator import _client as _llm_client
+from core.cache import rewrite_cache, retrieval_cache, answer_cache
 
 # --- Maintenance mode (toggled at runtime via /admin/maintenance) ---
 _maintenance_mode: bool = MAINTENANCE_MODE
@@ -110,6 +111,12 @@ def run(message: Message, session_history: list) -> Answer:
     print(f"[PIPELINE] Input: \"{message.text}\"")
     print(f"{'='*60}")
 
+    # ── Answer cache ──────────────────────────────────────────────────────────
+    _cached_answer = answer_cache.get(message.text)
+    if _cached_answer is not None:
+        print(f"[CACHE] Answer hit: \"{message.text}\"")
+        return _cached_answer
+
     # Guard + Step 1: run intent classify and fast retrieve in parallel
     print(f"\n[PIPELINE] Guard + Step 1: parallel classify + fast retrieve")
     with ThreadPoolExecutor(max_workers=2) as _pool:
@@ -153,24 +160,34 @@ def run(message: Message, session_history: list) -> Answer:
     if not _shortcut:
         # Step 2: Analyze intent + rewrite query + answerability check in a single LLM call
         print(f"\n[PIPELINE] Step 2: Analyze + Rewrite (single call)")
-        try:
-            if fast_chunks:
-                user_intent, rewritten, answerable = analyze_and_rewrite(
-                    message.text, chunks=fast_chunks, session_history=session_history
+
+        # ── Rewrite cache ─────────────────────────────────────────────────────────
+        _cached_rewrite = rewrite_cache.get(message.text)
+        if _cached_rewrite is not None:
+            user_intent, rewritten, answerable = _cached_rewrite
+            print(f"[CACHE] Rewrite hit: \"{message.text}\" → \"{rewritten}\"")
+        else:
+            try:
+                if fast_chunks:
+                    user_intent, rewritten, answerable = analyze_and_rewrite(
+                        message.text, chunks=fast_chunks, session_history=session_history
+                    )
+                else:
+                    user_intent, rewritten, answerable = analyze_and_rewrite(
+                        message.text, session_history=session_history
+                    )
+            except LLMUnavailableError:
+                print("[PIPELINE] vLLM unavailable during analyze+rewrite → LLM unavailable response")
+                return Answer(
+                    text="⚠️ Hệ thống AI đang bận hoặc đang khởi động lại, vui lòng thử lại sau 1–2 phút. Nếu vẫn lỗi, liên hệ bộ phận IT để kiểm tra server.",
+                    confidence=0.0,
+                    source_chunks=[],
+                    is_fallback=True,
+                    rewritten_question="",
                 )
-            else:
-                user_intent, rewritten, answerable = analyze_and_rewrite(
-                    message.text, session_history=session_history
-                )
-        except LLMUnavailableError:
-            print("[PIPELINE] vLLM unavailable during analyze+rewrite → LLM unavailable response")
-            return Answer(
-                text="⚠️ Hệ thống AI đang bận hoặc đang khởi động lại, vui lòng thử lại sau 1–2 phút. Nếu vẫn lỗi, liên hệ bộ phận IT để kiểm tra server.",
-                confidence=0.0,
-                source_chunks=[],
-                is_fallback=True,
-                rewritten_question="",
-            )
+            rewrite_cache.set(message.text, (user_intent, rewritten, answerable))
+            print(f"[CACHE] Rewrite miss → stored: \"{rewritten}\"")
+
         print(f"[PIPELINE] analyze_and_rewrite: intent=\"{user_intent}\" query=\"{rewritten}\"")
 
         # Step 2.5: Clarify if query is too vague
@@ -193,7 +210,15 @@ def run(message: Message, session_history: list) -> Answer:
     if not _shortcut:
         # Step 3: Full retrieve with rewritten query
         print(f"\n[PIPELINE] Step 3: Full retrieve (top {RETRIEVER_TOP_K})")
-        chunks = retriever.retrieve(rewritten, top_k=RETRIEVER_TOP_K)
+
+        # ── Retrieval cache ───────────────────────────────────────────────────────
+        chunks = retrieval_cache.get(rewritten)
+        if chunks is not None:
+            print(f"[CACHE] Retrieval hit: {len(chunks)} chunks")
+        else:
+            chunks = retriever.retrieve(rewritten, top_k=RETRIEVER_TOP_K)
+            retrieval_cache.set(rewritten, chunks)
+            print(f"[CACHE] Retrieval miss → stored {len(chunks)} chunks")
     else:
         # Shortcut path: use fast chunks directly
         chunks = fast_chunks
@@ -239,6 +264,9 @@ def run(message: Message, session_history: list) -> Answer:
         is_fallback=False,
         rewritten_question=rewritten,
     )
+
+    # ── Store in answer cache ─────────────────────────────────────────────────
+    answer_cache.set(message.text, answer)
 
     print(f"\n[PIPELINE] Done. confidence={answer.confidence:.4f} fallback={answer.is_fallback}")
     return answer
