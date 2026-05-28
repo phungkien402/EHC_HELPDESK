@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-
+from fastapi.staticfiles import StaticFiles
 from config import SESSION_MAX_TURNS, ADMIN_TOKEN
 from core.models import Message
 from core.pipeline import run as run_pipeline, set_maintenance_mode, is_maintenance_mode
@@ -32,6 +32,7 @@ from core.retriever import _client as _qdrant_client
 from core.bm25_index import get_bm25_index
 
 app = FastAPI(title="EHC AI Helpdesk")
+app.mount("/admin", StaticFiles(directory="admin_console", html=True), name="admin_console")
 
 # CORS for web UI
 app.add_middleware(
